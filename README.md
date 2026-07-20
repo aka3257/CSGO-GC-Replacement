@@ -25,8 +25,8 @@ then open console in that folder and run server with `node Server_v2.js`
 
 ## Special thanks to:
 
-The CSGO Modding community
-Valve for protobuf protocol
+- The CSGO Modding community
+- Valve for protobuf protocol
 
 ## LICENSE
 
