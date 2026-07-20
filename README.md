@@ -4,6 +4,9 @@
 
 A custom Game Coordinator for CS:GO Legacy, written in Node.js.
 
+## warning:
+This code sucks and not perfect, cuz its in active developing phase
+
 ## Features
 
 - connects to CSGO Legacy (with modified csgo_gc)
