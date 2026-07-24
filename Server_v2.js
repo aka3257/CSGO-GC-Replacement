@@ -8,7 +8,7 @@ const root = protobuf.loadSync([
     "proto/gcsdk_gcmessages.proto"
 ]);
 
-const DEVMODE = 0  //switch to 1 for advanced logging
+const DEVMODE = 1  //switch to 1 for advanced logging
 
 const DATA_DIR = './playerData';
 
@@ -178,50 +178,71 @@ const events = new EventBus();
 
 const sessions = new Map();
 
-events.on('CMsgGCClientHello', (data, res) => {
-    const accountId = data?.account_id || 100000000;
-    console.log(`[HANDLER] ClientHello for ${accountId}`)
-    let session = loadPlayer(accountId)
+events.on('CMsgGCClientHello', (data, client) => {
 
-    if (!session) {
-        session = {
-            accountId: accountId,
-            rankings: {
-                wingman: {
-                    rank: 5,
-                    wins: 69
-                },
-                competitive: {
-                    rank: 1,
-                    wins: 5
-                },
-                dangerzone: {
-                    rank: 1,
-                    wins: 1
-                }
+    console.log('[HANDLER] ClientHello')
+
+    client.session = {
+        accountId: null,
+        rankings: {
+            wingman: {
+                rank: 1,
+                wins: 0
             },
-            matchmaking: false,
-            matchId: null,
-            partyId: null,
-            lastPing: Date.now(),
-            isInitiatedMMSearchStop: false
-        };
-        sessions.set(accountId, session);
-    } else {
-        sessions.set(accountId, session);
-    }
+            competitive: {
+                rank: 1,
+                wins: 0
+            },
+            dangerzone: {
+                rank: 1,
+                wins: 0
+            }
+        },
+        matchmaking: false,
+        matchId: null,
+        partyId: null,
+        lastPing: Date.now(),
+        isInitiatedMMSearchStop: false
+    };
 
-    sendProto(res, 4004, 'CMsgGCClientWelcome', {
-        version: 1575,
-        legacy_version: data?.legacy_version || 0,
-        clientLauncher: data?.clientLauncher || 0
+        // Создаем CMsgCStrike15Welcome
+    const csWelcome = {
+        storeItemHash: 0,
+        timeplayedconsecutively: 0,
+        timeFirstPlayed: Math.floor(Date.now() / 1000),
+        lastTimePlayed: Math.floor(Date.now() / 1000),
+        lastIpAddress: 0,
+        gscookieid: Math.floor(Math.random() * 1000000000),
+        uniqueid: Math.floor(Math.random() * 1000000000)
+    };
+
+    const CsWelcomeType = root.lookupType('CMsgCStrike15Welcome');
+    const gamedata = CsWelcomeType.encode(csWelcome).finish();
+
+    // Отправляем ClientWelcome
+    sendProto(client, 4004, 'CMsgGCClientWelcome', {
+        version: 13881,
+        gameData: gamedata,
+        outofdate_subscribed_caches: [],
+        uptodate_subscribed_caches: [],
+        location: {
+            latitude: 55.7558,
+            longitude: 37.6173,
+            country: "RU"
+        },
+        gameData2: Buffer.alloc(0),
+        rtime32GcWelcomeTimestamp: Math.floor(Date.now() / 1000),
+        currency: 0,
+        balance: 0,
+        balanceUrl: "",
+        txnCountryCode: "RU"
     });
-    savePlayer(accountId)
+//    savePlayer(accountId)
 });
 
-events.on('CMsgGCCStrike15_v2_MatchmakingStart', (data, res) => {
+events.on('CMsgGCCStrike15_v2_MatchmakingStart', (data, client) => {
     const accountIds = data?.account_ids || [];
-    const accountId = accountIds[0] || 100000000;
+    const accountId = accountIds[0] || 13371337;
     const session = sessions.get(accountId)
     console.log(`[HANDLER] Matchmaking Start for ${accountId}`);
     const gameType = data?.game_type || 0;
@@ -231,31 +252,24 @@ events.on('CMsgGCCStrike15_v2_MatchmakingStart', (data, res) => {
         savePlayer(accountId)
     }
 
-    sendProto(res, 9104, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientUpdate', {
+    sendProto(client, 9104, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientUpdate', {
         matchmaking: 1,
-        waiting_account_id_sessions: [accountId],
-        error: "",
-        ongoingmatch_account_id_sessions: [],
-        global_stats: {
-            players_online: 1000000,
-            servers_online: 50000,
-            players_searching: 5,  //accountIds.length,
-            servers_available: 30000,
-            ongoing_matches: 5000,
-            search_time_avg: 30,
-            search_statistics: [],
-            required_appid_version: 1575,
-            rtime32_cur: Math.floor(Date.now() / 1000)
+        waitingAccountIdSessions: [13371337],
+        globalStats: {
+            playersOnline: 1000000,
+            serversOnline: 50000,
+            playersSearching: 5,
+            serversAvailable: 30000,
+            ongoingMatches: 5000,
+            searchTimeAvg: 30,
+            requiredAppidVersion: 13881,
+            rtime32Cur: Math.floor(Date.now() / 1000)
         },
-        failping_account_id_sessions: [],
-        penalty_account_id_sessions: [],
-        failready_account_id_sessions: [],
-        vacbanned_account_id_sessions: [],
         notes: [
             {
-                type: gameType,
-                region_id: 0,
-                region_r: 0,
+                type: 462552584,
+                regionId: 0,
+                regionR: 0,
                 distance: 0
             }
         ],
@@ -267,67 +281,67 @@ events.on('CMsgGCCStrike15_v2_MatchmakingStart', (data, res) => {
     });
 });
 
-events.on('CMsgGCCStrike15_v2_MatchmakingClient2ServerPing', (data, res) => {
+events.on('CMsgGCCStrike15_v2_MatchmakingClient2ServerPing', (data, client) => {
     console.log('[HANDLER] Ping');
-    sendProto(res, 9104, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientUpdate', {
+    sendProto(client, 9104, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientUpdate', {
         matchmaking: 1,
-        waiting_account_id_sessions: [985123137],
-        global_stats: {
-            players_online: 1000000,
-            servers_online: 50000,
-            players_searching: 5,
-            servers_available: 30000,
-            ongoing_matches: 5000,
-            search_time_avg: 30,
-            required_appid_version: 13881,
-            rtime32_cur: Math.floor(Date.now() / 1000)
+        waitingAccountIdSessions: [13371337],
+        globalStats: {
+            playersOnline: 1000000,
+            serversOnline: 50000,
+            playersSearching: 5,
+            serversAvailable: 30000,
+            ongoingMatches: 5000,
+            searchTimeAvg: 30,
+            requiredAppidVersion: 13881,
+            rtime32Cur: Math.floor(Date.now() / 1000)
         },
         notes: [
             {
                 type: 462552584,
-                region_id: 0,
-                region_r: 0,
+                regionId: 0,
+                regionR: 0,
                 distance: 0
             }
         ]
     });
 });
 
-events.on('CMsgGCCStrike15_v2_GetEventFavorites_Request', (data, res) => {
+events.on('CMsgGCCStrike15_v2_GetEventFavorites_Request', (data, client) => {
     console.log('[HANDLER] GetEventFavorites');
-    sendProto(res, 9203, 'CMsgGCCStrike15_v2_GetEventFavorites_Response', {
-        all_events: false,
-        json_favorites: "{}",
-        json_featured: "{}"
+    sendProto(client, 9203, 'CMsgGCCStrike15_v2_GetEventFavorites_Response', {
+        allEvents: false,
+        jsonFavorites: "{}",
+        jsonFeatured: "{}"
     });
 });
 
-events.on('CMsgGCCStrike15_v2_MatchmakingStop', (data, res) => {
-    const accountId = data?.account_id || 100000000;
+events.on('CMsgGCCStrike15_v2_MatchmakingStop', (data, client) => {
+    const accountId = data?.account_id || 13371337;
     const session = sessions.get(accountId);
 
     console.log(`[MATCHMAKING STOP] Received for ${accountId}`);
 
     if (sessions.isInitiatedMMSearchStop = false) {
-        sendProto(res, 9102, 'CMsgGCCStrike15_v2_MatchmakingStop', {
+        sendProto(client, 9102, 'CMsgGCCStrike15_v2_MatchmakingStop', {
             abandon: 1
         })
         sessions.isInitiatedMMSearchStop = true
     } else {
-        sendProto(res, 9104, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientUpdate', {
+        sendProto(client, 9104, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientUpdate', {
             matchmaking: 2,  // Stopped
-            waiting_account_id_sessions: [],
+            waitingAccountIdSessions: [],
             error: "",
-            ongoingmatch_account_id_sessions: [],
-            global_stats: {
-                players_online: 1000000,
-                servers_online: 50000,
-                players_searching: 0,
-                servers_available: 30000,
-                ongoing_matches: 5000,
-                search_time_avg: 30,
-                required_appid_version: 1575,
-                rtime32_cur: Math.floor(Date.now() / 1000)
+            ongoingmatchAccountIdSessions: [],
+            globalStats: {
+                playersOnline: 1000000,
+                serversOnline: 50000,
+                playersSearching: 0,
+                serversAvailable: 30000,
+                ongoingMatches: 5000,
+                searchTimeAvg: 30,
+                requiredAppidVersion: 13881,
+                rtime32Cur: Math.floor(Date.now() / 1000)
             },
             notes: []
         });
@@ -336,9 +350,9 @@ events.on('CMsgGCCStrike15_v2_MatchmakingStop', (data, res) => {
     }
 });
 
-events.on('CMsgGCCStrike15_v2_MatchmakingClient2GCHello', (data, res) => {
+events.on('CMsgGCCStrike15_v2_MatchmakingClient2GCHello', (data, client) => {
     
-    const accountId = data?.account_id || 100000000; 
+    const accountId = data?.account_id || 13371337; 
     let session = sessions.get(accountId)
 
     if (!session) {
@@ -346,39 +360,43 @@ events.on('CMsgGCCStrike15_v2_MatchmakingClient2GCHello', (data, res) => {
     }
 
     console.log(`got Client2GCHello for id ${accountId}`)
-    sendProto(res, 9109, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientHello', {
+    sendProto(client, 9109, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientHello', {
         account_id: session,
         ranking: {
-                account_id: session,
-                rank_id: 6,
+                accountId: session,
+                rankId: 6,
                 wins: 150,
-                rank_type_id: 1,
-                rank_window_stats: 0,
-                rank_if_win: 12,
-                rank_if_lose: 10,
-                rank_if_tie: 11
+                rankTypeId: 1,
+                rankWindowStats: 0,
+                rankIfWin: 12,
+                rankIfLose: 10,
+                rankIfTie: 11
             },
         commendation: {
-            cmd_friendly: 1337,
-            cmd_teaching: 1488,
-            cmd_leader: 3257
+            cmdFriendly: 1337,
+            cmdTeaching: 1488,
+            cmdLeader: 3257
         },
-        player_level: 28,
-        player_cur_xp: 11111,
+        playerLevel: 28,
+        playerCurXp: 11111,
         
     })
 })
 
-events.on('CMsgGCCStrike15_v2_ClientGCRankUpdate', (data, res) => {
+events.on('CMsgGCCStrike15_v2_ClientGCRankUpdate', (data, client) => {
     console.log('[RANK UPDATE] Received');
     
-    const accountId = data?.account_id || 100000000;
+    if (DEVMODE === 1) {
+        console.log('RECEIVED RANK UPDATE, DATA:', JSON.stringify(data, null, 2));
+    }
+
+    const accountId = data?.account_id || 13371337;
     const session = sessions.get(accountId);
     
     if (!session) {
         console.log(`[ERROR] Session not found for ${accountId}`);
         // Отправляем пустой ответ, чтобы клиент не спамил
-        sendProto(res, 9194, 'CMsgGCCStrike15_v2_ClientGCRankUpdate', {
+        sendProto(client, 9194, 'CMsgGCCStrike15_v2_ClientGCRankUpdate', {
             rankings: []
         });
         return;
@@ -386,45 +404,45 @@ events.on('CMsgGCCStrike15_v2_ClientGCRankUpdate', (data, res) => {
     
     console.log(`[RANK UPDATE] for ${accountId}, competitive rank: ${session.rankings.competitive.rank}`);
     
-    sendProto(res, 9194, 'CMsgGCCStrike15_v2_ClientGCRankUpdate', {
+    sendProto(client, 9194, 'CMsgGCCStrike15_v2_ClientGCRankUpdate', {
         rankings: [
             {
                 account_id: accountId,
                 rank_id: session.rankings.competitive.rank || 1,
                 wins: session.rankings.competitive.wins || 0,
-                rank_type_id: 1,
+                rankTypeId: 6,
                 rank_window_stats: 0,
-                rank_if_win: 12,
-                rank_if_lose: 10,
-                rank_if_tie: 11
+                rankIfWin: 12,
+                rankIfLose: 10,
+                rankIfTie: 11
             },
-            {
-                account_id: accountId,
-                rank_id: session.rankings.wingman.rank || 1,
-                wins: session.rankings.wingman.wins || 0,
-                rank_type_id: 2,
-                rank_window_stats: 0,
-                rank_if_win: 12,
-                rank_if_lose: 10,
-                rank_if_tie: 11
-            },
-            {
-                account_id: accountId,
-                rank_id: session.rankings.dangerzone.rank || 1,
-                wins: session.rankings.dangerzone.wins || 0,
-                rank_type_id: 3,
-                rank_window_stats: 0,
-                rank_if_win: 12,
-                rank_if_lose: 10,
-                rank_if_tie: 11
-            }
+//            {
+//                account_id: accountId,
+//                rank_id: session.rankings.wingman.rank || 1,
+//                wins: session.rankings.wingman.wins || 0,
+//                rank_type_id: 7,
+//                rank_window_stats: 0,
+//                rank_if_win: 12,
+//                rank_if_lose: 10,
+//                rank_if_tie: 11
+//            },
+//            {
+//                account_id: accountId,
+//                rank_id: session.rankings.dangerzone.rank || 1,
+//                wins: session.rankings.dangerzone.wins || 0,
+//                rank_type_id: 10,
+//                rank_window_stats: 0,
+//                rank_if_win: 12,
+//                rank_if_lose: 10,
+//                rank_if_tie: 11
+//            }
         ]
     });
 });
 
-events.on('CMsgGCCStrike15_v2_Party_Register', (data, res) => {
+events.on('CMsgGCCStrike15_v2_Party_Register', (data, client) => {
     console.log('[PARTY] Register');
-    sendProto(res, 9190, 'CMsgGCCStrike15_v2_Party_Unregister', {});
+    sendProto(client, 9190, 'CMsgGCCStrike15_v2_Party_Unregister', {});
 });
 
 // server body
