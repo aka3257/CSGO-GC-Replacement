@@ -8,7 +8,7 @@ const root = protobuf.loadSync([
     "proto/gcsdk_gcmessages.proto"
 ]);
 
-const DEVMODE = 1  //switch to 1 for advanced logging
+const DEVMODE = 0; // set to 1 for advanced logging
 
 const DATA_DIR = './playerData';
 
@@ -16,7 +16,7 @@ if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR);
 }
 
-// ID dictionary
+// id dictionary
 
 const IDict = {
     4004: 'CMsgGCClientWelcome',
@@ -106,9 +106,9 @@ function getMSGdata(data) {
         const parsed = JSON.parse(data.toString());
         const msgId = parsed.msgType & 0x7FFFFFFF;
         const messageName = getMessageNameById(msgId);
-        const isResponse = (parsed.msgType & 0x80000000) !== 0;
+        const steamId = parsed.steamid || 0;
         if (DEVMODE === 1) {
-            console.log(`[RAW] MsgType: ${msgId}, Name: ${messageName || 'UNKNOWN'}`);
+            console.log(`[RAW] MsgType: ${msgId}, Name: ${messageName || 'UNKNOWN'}, steamid: ${steamId}`);
         }
         if (!messageName) {
             console.log('Unknown message');
@@ -122,22 +122,20 @@ function getMSGdata(data) {
         if (DEVMODE === 1) {
             console.log('DATA:', JSON.stringify(decoded, null, 2));
         }
-        return { name: messageName, data: decoded };
+        return { name: messageName, steamid: steamId, data: decoded };
     } catch (err) {
         console.error(`[ERROR] getMSGdata:`, err.message);
         return null;
     }
 }
 
-// save player data
 function savePlayer(accountId) {
-    const accId = sessions.get(accountId);
-    if (!accId) return;
+    const session = sessions.get(accountId);
+    if (!session) return;
     const filePath = `${DATA_DIR}/${accountId}.json`;
-    fs.writeFileSync(filePath, JSON.stringify(accId, null, 2));
+    fs.writeFileSync(filePath, JSON.stringify(session, null, 2));
 }
 
-// load player data
 function loadPlayer(accountId) {
     const filePath = `${DATA_DIR}/${accountId}.json`;
     if (fs.existsSync(filePath)) {
@@ -146,7 +144,38 @@ function loadPlayer(accountId) {
     return null;
 }
 
-// event system
+function getOrCreateSession(steamId) {
+
+//    const accountId = Number(steamId & 0xFFFFFFFFn); // if steam id is bigint
+    const accountId = steamId % 2**32;
+
+    let session = loadPlayer(accountId);
+    if (!session) {
+        session = {
+            accountId: accountId,
+            rankings: {
+                competitive: {
+                    rank: 1,
+                    wins: 0
+                },
+                wingman: {
+                    rank: 1,
+                    wins: 0
+                }
+            },
+            matchmaking: false,
+            matchId: null,
+            partyId: null,
+            lastPing: Date.now(),
+            isInitiatedMMSearchStop: false
+        };
+        savePlayer(accountId, session);
+    }
+    sessions.set(accountId, session)
+    return { accountId, session };
+}
+
+// event handler
 
 class EventBus {
     constructor() {
@@ -161,10 +190,10 @@ class EventBus {
         console.log(`[EVENT] Subscribed: ${eventName}`);
     }
 
-    emit(eventName, data, res) {
+    emit(eventName, data, res, steamid) {
         if (this.handlers.has(eventName)) {
             for (const handler of this.handlers.get(eventName)) {
-                handler(data, res);
+                handler(data, res, steamid);
             }
             return true;
         }
@@ -174,38 +203,45 @@ class EventBus {
 
 const events = new EventBus();
 
-// events
+// events(reqs from client)
 
 const sessions = new Map();
 
-events.on('CMsgGCClientHello', (data, client) => {
+events.on('CMsgGCClientHello', (data, res, steamid) => {
+    console.log('[HANDLER] ClientHello');
 
-    console.log('[HANDLER] ClientHello')
+    const accountId = steamid ? Number(BigInt(steamid) & 0xFFFFFFFFn) : 0;
+    if (!accountId) {
+        console.log('[ERROR] No steamid received');
+        return;
+    }
 
-    client.session = {
-        accountId: null,
-        rankings: {
-            wingman: {
-                rank: 1,
-                wins: 0
+//    const accountId = Number(BigInt(steamid) & 0xFFFFFFFFn);
+    const accId = getOrCreateSession(steamid)
+    console.log(`[HANDLER] accountId: ${accountId}`);
+
+    let session = loadPlayer(accountId);
+    if (!session) {
+        session = {
+            accountId: accountId,
+            rankings: {
+                competitive: { rank: 1, wins: 0 },
+                wingman: { rank: 1, wins: 0 },
+                dangerzone: { rank: 1, wins: 0 }
             },
-            competitive: {
-                rank: 1,
-                wins: 0
-            },
-            dangerzone: {
-                rank: 1,
-                wins: 0
-            }
-        },
-        matchmaking: false,
-        matchId: null,
-        partyId: null,
-        lastPing: Date.now(),
-        isInitiatedMMSearchStop: false
-    };
+            matchmaking: false,
+            matchId: null,
+            partyId: null,
+            lastPing: Date.now(),
+            isInitiatedMMSearchStop: false
+        };
+        sessions.set(accountId, session)
+        savePlayer(accountId);
 
-        // Создаем CMsgCStrike15Welcome
+    }
+
+//    sessions.set(accountId, session);
+
     const csWelcome = {
         storeItemHash: 0,
         timeplayedconsecutively: 0,
@@ -219,8 +255,7 @@ events.on('CMsgGCClientHello', (data, client) => {
     const CsWelcomeType = root.lookupType('CMsgCStrike15Welcome');
     const gamedata = CsWelcomeType.encode(csWelcome).finish();
 
-    // Отправляем ClientWelcome
-    sendProto(client, 4004, 'CMsgGCClientWelcome', {
+    sendProto(res, 4004, 'CMsgGCClientWelcome', {
         version: 13881,
         gameData: gamedata,
         outofdate_subscribed_caches: [],
@@ -237,141 +272,32 @@ events.on('CMsgGCClientHello', (data, client) => {
         balanceUrl: "",
         txnCountryCode: "RU"
     });
-//    savePlayer(accountId)
 });
 
-events.on('CMsgGCCStrike15_v2_MatchmakingStart', (data, client) => {
-    const accountIds = data?.account_ids || [];
-    const accountId = accountIds[0] || 13371337;
-    const session = sessions.get(accountId)
-    console.log(`[HANDLER] Matchmaking Start for ${accountId}`);
-    const gameType = data?.game_type || 0;
-    
-    if (session) {
-        session.matchmaking = true;
-        savePlayer(accountId)
-    }
-
-    sendProto(client, 9104, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientUpdate', {
-        matchmaking: 1,
-        waitingAccountIdSessions: [13371337],
-        globalStats: {
-            playersOnline: 1000000,
-            serversOnline: 50000,
-            playersSearching: 5,
-            serversAvailable: 30000,
-            ongoingMatches: 5000,
-            searchTimeAvg: 30,
-            requiredAppidVersion: 13881,
-            rtime32Cur: Math.floor(Date.now() / 1000)
-        },
-        notes: [
-            {
-                type: 462552584,
-                regionId: 0,
-                regionR: 0,
-                distance: 0
-            }
-        ],
-        penalty_account_id_sessions_green: [],
-        insufficientlevel_sessions: [],
-        vsncheck_account_id_sessions: [],
-        launcher_mismatch_sessions: [],
-        insecure_account_id_sessions: []
-    });
-});
-
-events.on('CMsgGCCStrike15_v2_MatchmakingClient2ServerPing', (data, client) => {
-    console.log('[HANDLER] Ping');
-    sendProto(client, 9104, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientUpdate', {
-        matchmaking: 1,
-        waitingAccountIdSessions: [13371337],
-        globalStats: {
-            playersOnline: 1000000,
-            serversOnline: 50000,
-            playersSearching: 5,
-            serversAvailable: 30000,
-            ongoingMatches: 5000,
-            searchTimeAvg: 30,
-            requiredAppidVersion: 13881,
-            rtime32Cur: Math.floor(Date.now() / 1000)
-        },
-        notes: [
-            {
-                type: 462552584,
-                regionId: 0,
-                regionR: 0,
-                distance: 0
-            }
-        ]
-    });
-});
-
-events.on('CMsgGCCStrike15_v2_GetEventFavorites_Request', (data, client) => {
-    console.log('[HANDLER] GetEventFavorites');
-    sendProto(client, 9203, 'CMsgGCCStrike15_v2_GetEventFavorites_Response', {
-        allEvents: false,
-        jsonFavorites: "{}",
-        jsonFeatured: "{}"
-    });
-});
-
-events.on('CMsgGCCStrike15_v2_MatchmakingStop', (data, client) => {
-    const accountId = data?.account_id || 13371337;
+events.on('CMsgGCCStrike15_v2_MatchmakingClient2GCHello', (data, res, steamid) => {
+//    const accountId = data?.account_id || 100000000; 
+    const accountId = steamid;
     const session = sessions.get(accountId);
 
-    console.log(`[MATCHMAKING STOP] Received for ${accountId}`);
-
-    if (sessions.isInitiatedMMSearchStop = false) {
-        sendProto(client, 9102, 'CMsgGCCStrike15_v2_MatchmakingStop', {
-            abandon: 1
-        })
-        sessions.isInitiatedMMSearchStop = true
-    } else {
-        sendProto(client, 9104, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientUpdate', {
-            matchmaking: 2,  // Stopped
-            waitingAccountIdSessions: [],
-            error: "",
-            ongoingmatchAccountIdSessions: [],
-            globalStats: {
-                playersOnline: 1000000,
-                serversOnline: 50000,
-                playersSearching: 0,
-                serversAvailable: 30000,
-                ongoingMatches: 5000,
-                searchTimeAvg: 30,
-                requiredAppidVersion: 13881,
-                rtime32Cur: Math.floor(Date.now() / 1000)
-            },
-            notes: []
-        });
-        sessions.isInitiatedMMSearchStop = false
-        sessions.matchmaking = false
-    }
-});
-
-events.on('CMsgGCCStrike15_v2_MatchmakingClient2GCHello', (data, client) => {
-    
-    const accountId = data?.account_id || 13371337; 
-    let session = sessions.get(accountId)
-
     if (!session) {
-       console.log(`[ERROR] Session not found for ${accountId}`) 
+        console.log(`[ERROR] Session not found for ${accountId}`);
+        return;
     }
 
-    console.log(`got Client2GCHello for id ${accountId}`)
-    sendProto(client, 9109, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientHello', {
-        account_id: session,
+    console.log(`got Client2GCHello for id ${accountId}`);
+    
+    sendProto(res, 9110, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientHello', {
+        accountId: accountId,
         ranking: {
-                accountId: session,
-                rankId: 6,
-                wins: 150,
-                rankTypeId: 1,
-                rankWindowStats: 0,
-                rankIfWin: 12,
-                rankIfLose: 10,
-                rankIfTie: 11
-            },
+            accountId: accountId,
+            rankId: session.rankings.competitive.rank || 1,
+            wins: session.rankings.competitive.wins || 0,
+            rankTypeId: 6,
+            rankWindowStats: 0,
+            rankIfWin: 12,
+            rankIfLose: 10,
+            rankIfTie: 11
+        },
         commendation: {
             cmdFriendly: 1337,
             cmdTeaching: 1488,
@@ -379,70 +305,237 @@ events.on('CMsgGCCStrike15_v2_MatchmakingClient2GCHello', (data, client) => {
         },
         playerLevel: 28,
         playerCurXp: 11111,
-        
-    })
-})
+    });
+});
 
-events.on('CMsgGCCStrike15_v2_ClientGCRankUpdate', (data, client) => {
-    console.log('[RANK UPDATE] Received');
+events.on('CMsgGCCStrike15_v2_MatchmakingStart', (data, res, steamid) => {
+//    const accountIds = data?.account_ids || [];
+    const accountIds = steamid;
+    const accountId = accountIds[0] || null;
     
-    if (DEVMODE === 1) {
-        console.log('RECEIVED RANK UPDATE, DATA:', JSON.stringify(data, null, 2));
-    }
-
-    const accountId = data?.account_id || 13371337;
-    const session = sessions.get(accountId);
+    const tempId = `temp_1`;
+    const session = sessions.get(tempId);
     
     if (!session) {
-        console.log(`[ERROR] Session not found for ${accountId}`);
-        // Отправляем пустой ответ, чтобы клиент не спамил
-        sendProto(client, 9194, 'CMsgGCCStrike15_v2_ClientGCRankUpdate', {
-            rankings: []
-        });
+        console.log(`[ERROR] Session not found for ${tempId}`);
         return;
     }
     
-    console.log(`[RANK UPDATE] for ${accountId}, competitive rank: ${session.rankings.competitive.rank}`);
+    if (accountId) {
+        session.accountId = accountId;
+        sessions.delete(tempId);
+        sessions.set(accountId, session);
+        
+        const oldPath = `${DATA_DIR}/${tempId}.json`;
+        const newPath = `${DATA_DIR}/${accountId}.json`;
+        if (fs.existsSync(oldPath)) {
+            fs.renameSync(oldPath, newPath);
+        }
+    }
     
-    sendProto(client, 9194, 'CMsgGCCStrike15_v2_ClientGCRankUpdate', {
-        rankings: [
+    console.log(`[HANDLER] Matchmaking Start for ${accountId || tempId}`);
+    const gameType = data?.game_type || 0;
+    
+    if (session) {
+        session.matchmaking = true;
+        savePlayer(accountId || tempId);
+    }
+
+    sendProto(res, 9104, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientUpdate', {
+        matchmaking: 1,
+        waitingAccountIdSessions: [accountId || 100000000],
+        globalStats: {
+            playersOnline: 1000000,
+            serversOnline: 50000,
+            playersSearching: 5,
+            serversAvailable: 30000,
+            ongoingMatches: 5000,
+            searchTimeAvg: 30,
+            requiredAppidVersion: 13881,
+            rtime32Cur: Math.floor(Date.now() / 1000)
+        },
+        notes: [
             {
-                account_id: accountId,
-                rank_id: session.rankings.competitive.rank || 1,
-                wins: session.rankings.competitive.wins || 0,
-                rankTypeId: 6,
-                rank_window_stats: 0,
-                rankIfWin: 12,
-                rankIfLose: 10,
-                rankIfTie: 11
-            },
-//            {
-//                account_id: accountId,
-//                rank_id: session.rankings.wingman.rank || 1,
-//                wins: session.rankings.wingman.wins || 0,
-//                rank_type_id: 7,
-//                rank_window_stats: 0,
-//                rank_if_win: 12,
-//                rank_if_lose: 10,
-//                rank_if_tie: 11
-//            },
-//            {
-//                account_id: accountId,
-//                rank_id: session.rankings.dangerzone.rank || 1,
-//                wins: session.rankings.dangerzone.wins || 0,
-//                rank_type_id: 10,
-//                rank_window_stats: 0,
-//                rank_if_win: 12,
-//                rank_if_lose: 10,
-//                rank_if_tie: 11
-//            }
+                type: 462552584,
+                regionId: 0,
+                regionR: 0,
+                distance: 0
+            }
         ]
     });
 });
 
-events.on('CMsgGCCStrike15_v2_Party_Register', (data, client) => {
+events.on('CMsgGCCStrike15_v2_MatchmakingClient2ServerPing', (data, res) => {
+    console.log('[HANDLER] Ping');
+    sendProto(res, 9104, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientUpdate', {
+        matchmaking: 1,
+        waitingAccountIdSessions: [100000000],
+        globalStats: {
+            playersOnline: 1000000,
+            serversOnline: 50000,
+            playersSearching: 5,
+            serversAvailable: 30000,
+            ongoingMatches: 5000,
+            searchTimeAvg: 30,
+            requiredAppidVersion: 13881,
+            rtime32Cur: Math.floor(Date.now() / 1000)
+        },
+        notes: [
+            {
+                type: 462552584,
+                regionId: 0,
+                regionR: 0,
+                distance: 0
+            }
+        ]
+    });
+});
+
+events.on('CMsgGCCStrike15_v2_GetEventFavorites_Request', (data, res, steamid) => {
+    console.log('[HANDLER] GetEventFavorites');
+    sendProto(res, 9203, 'CMsgGCCStrike15_v2_GetEventFavorites_Response', {
+        allEvents: false,
+        jsonFavorites: "{}",
+        jsonFeatured: "{}"
+    });
+});
+
+events.on('CMsgGCCStrike15_v2_MatchmakingStop', (data, res, steamid) => {
+//    const accountId = data?.account_id || 100000000;
+    const accountId = steamid;
+    const session = sessions.get(accountId);
+
+    console.log(`[MATCHMAKING STOP] Received for ${accountId}`);
+
+    if (!session) {
+        console.log(`[ERROR] Session not found for ${accountId}`);
+        return;
+    }
+
+    if (session.isInitiatedMMSearchStop) {
+        console.log('[MATCHMAKING STOP] Already stopping, ignoring');
+        return;
+    }
+
+    session.isInitiatedMMSearchStop = true;
+    session.matchmaking = false;
+
+    sendProto(res, 9104, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientUpdate', {
+        matchmaking: 2,
+        waitingAccountIdSessions: [],
+        globalStats: {
+            playersOnline: 1000000,
+            serversOnline: 50000,
+            playersSearching: 0,
+            serversAvailable: 30000,
+            ongoingMatches: 5000,
+            searchTimeAvg: 30,
+            requiredAppidVersion: 13881,
+            rtime32Cur: Math.floor(Date.now() / 1000)
+        },
+        notes: []
+    });
+
+    session.isInitiatedMMSearchStop = false;
+    savePlayer(accountId);
+});
+
+events.on('CMsgGCCStrike15_v2_MatchmakingClient2GCHello', (data, res, steamid) => {
+//    const accountId = data?.account_id || 100000000; 
+    const accountId = steamid;
+    const session = sessions.get(accountId);
+
+    if (!session) {
+        console.log(`[ERROR] Session not found for ${accountId}`);
+        return;
+    }
+
+    console.log(`got Client2GCHello for id ${accountId}`);
+    
+    sendProto(res, 9110, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientHello', {
+        accountId: accountId,
+        ranking: {
+            accountId: accountId,
+            rankId: session.rankings.competitive.rank || 1,
+            wins: session.rankings.competitive.wins || 0,
+            rankTypeId: 6,
+            rankWindowStats: 0,
+            rankIfWin: 12,
+            rankIfLose: 10,
+            rankIfTie: 11
+        },
+        commendation: {
+            cmdFriendly: 1337,
+            cmdTeaching: 1488,
+            cmdLeader: 3257
+        },
+        playerLevel: 28,
+        playerCurXp: 11111,
+    });
+});
+
+events.on('CMsgGCCStrike15_v2_ClientGCRankUpdate', (data, res, steamid) => {
+    console.log('[RANK UPDATE] Received');
+    
+    const accountId = steamid ? Number(BigInt(steamid) & 0xFFFFFFFFn) : 0;
+    if (!accountId) {
+        console.log('[ERROR] No steamid received');
+        return;
+    }
+
+    let session = sessions.get(accountId);
+    if (!session) {
+        console.log(`[ERROR] Session not found for ${accountId}`);
+        // 1. Загружаем из файла, если есть
+        session = loadPlayer(accountId);
+        if (!session) {
+            console.log(`[ERROR] No session on disk for ${accountId}`);
+            return;
+        }
+        sessions.set(accountId, session);
+    }
+    
+    const competitiverank = session.rankings.competitive.rank || 1;
+    const wingmanrank = session.rankings.wingman.rank || 1;
+    console.log(`[RANK UPDATE] for ${accountId}, competitive rank: ${rank}`);
+    
+    if (data.rankings.rankTypeId = 6) {
+        sendProto(res, 9194, 'CMsgGCCStrike15_v2_ClientGCRankUpdate', {
+            rankings: [
+                {
+                    accountId: accountId,
+                    rankId: rank,
+                    wins: session.rankings.competitive.wins || 0,
+                    rankTypeId: 6,
+                    rankWindowStats: 0,
+                    rankIfWin: Math.min(competitiverank + 1, 18), // не может быть выше 18
+                    rankIfLose: Math.max(competitiverank - 1, 1), // не может быть ниже 1
+                    rankIfTie: rank
+                }
+            ]
+        });
+    } else {
+        sendProto(res, 9194, 'CMsgGCCStrike15_v2_ClientGCRankUpdate', {
+            rankings: [
+                {
+                    accountId: accountId,
+                    rankId: rank,
+                    wins: session.rankings.wingman.wins || 0,
+                    rankTypeId: 7,
+                    rankWindowStats: 0,
+                    rankIfWin: Math.min(wingmanrank + 1, 18), // не может быть выше 18
+                    rankIfLose: Math.max(wingmanrank - 1, 1), // не может быть ниже 1
+                    rankIfTie: rank
+                }
+            ]
+        });
+    }
+
+});
+
+events.on('CMsgGCCStrike15_v2_Party_Register', (data, res) => {
     console.log('[PARTY] Register');
-    sendProto(client, 9190, 'CMsgGCCStrike15_v2_Party_Unregister', {});
+    sendProto(res, 9190, 'CMsgGCCStrike15_v2_Party_Unregister', {});
 });
 
 // server body
@@ -457,7 +550,7 @@ const server = http.createServer((req, res) => {
                 const buffer = Buffer.concat(body);
                 const decoded = getMSGdata(buffer);
                 if (decoded) {
-                    events.emit(decoded.name, decoded.data, res);
+                    events.emit(decoded.name, decoded.data, res, decoded.steamid);
                 } else {
                     const parsed = JSON.parse(buffer.toString());
                     const msgId = parsed.msgType & 0x7FFFFFFF;
