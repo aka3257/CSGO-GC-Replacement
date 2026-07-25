@@ -19,7 +19,7 @@ This code sucks and not perfect, cuz its in active developing phase
 npm
 http
 protobufjs
-- CS:GO Legacy with modified `csgo_gc.dll` (will be available soon)
+- CS:GO Legacy with modified `csgo_gc.dll` [from there](https://github.com/aka3257/csgo_gc-mm)
 
 ## Quick Start
 
