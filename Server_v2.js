@@ -2,18 +2,38 @@ const http = require('http');
 const protobuf = require('protobufjs');
 const fs = require('fs');
 
+const CONFIG_FILE = './config.json'
+
+let config;
+try {
+    config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
+    console.log('[Notification] loaded config file!')
+} catch (err) {
+    console.log('[Notification] config file not found! if its first start its okay')
+    const default_config = {
+        host: '127.0.0.1',
+        port: 3257,
+        PlayerData: './playerData',
+        protoPath: './proto',
+        devmode: false
+    }
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(default_config, null, 2));
+    config = default_config;
+    console.log('[Notification] created config file')
+    console.log('[Advice] specify your ip in config file')
+}
+
 const root = protobuf.loadSync([
-    "proto/gcsystemmsgs.proto",
-    "proto/cstrike15_usermessages.proto",
-    "proto/gcsdk_gcmessages.proto"
+    `${config.protoPath}/gcsystemmsgs.proto`,
+    `${config.protoPath}/cstrike15_usermessages.proto`,
+    `${config.protoPath}/gcsdk_gcmessages.proto`
 ]);
 
-const DEVMODE = 0; // set to 1 for advanced logging
+const DEVMODE = config.devmode;
+const DATA_DIR = config.PlayerData;
 
-const DATA_DIR = './playerData';
-
-if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR);
+if (DEVMODE === true) {
+    console.log('[Notification] Server started in debug mode')
 }
 
 // id dictionary
@@ -73,8 +93,8 @@ function encodeGCMessage(messageName, object) {
 
 function sendProto(res, msgType, protoName, object) {
     try {
-        if (DEVMODE === 1) {
-            console.log('Sent object:', JSON.stringify(object, null, 2));
+        if (DEVMODE === true) {
+            console.log('[DEBUG] Sent object:', JSON.stringify(object, null, 2));
         }
         const Proto = root.lookupType(protoName);
         const message = Proto.fromObject(object);
@@ -107,11 +127,11 @@ function getMSGdata(data) {
         const msgId = parsed.msgType & 0x7FFFFFFF;
         const messageName = getMessageNameById(msgId);
         const steamId = parsed.steamid || 0;
-        if (DEVMODE === 1) {
-            console.log(`[RAW] MsgType: ${msgId}, Name: ${messageName || 'UNKNOWN'}, steamid: ${steamId}`);
+        if (DEVMODE === true) {
+            console.log(`[DEBUG] MsgType: ${msgId}, Name: ${messageName || 'UNKNOWN'}, steamid: ${steamId}`);
         }
         if (!messageName) {
-            console.log('Unknown message');
+            console.log('[ERROR] Unknown message');
             return null;
         }
         
@@ -119,7 +139,7 @@ function getMSGdata(data) {
         const protoData = payload.subarray(8);
         const MessageType = root.lookupType(messageName);
         const decoded = MessageType.decode(protoData);
-        if (DEVMODE === 1) {
+        if (DEVMODE === true) {
             console.log('DATA:', JSON.stringify(decoded, null, 2));
         }
         return { name: messageName, steamid: steamId, data: decoded };
@@ -187,7 +207,7 @@ class EventBus {
             this.handlers.set(eventName, []);
         }
         this.handlers.get(eventName).push(handler);
-        console.log(`[EVENT] Subscribed: ${eventName}`);
+//        console.log(`[EVENT] Subscribed: ${eventName}`);
     }
 
     emit(eventName, data, res, steamid) {
@@ -210,54 +230,130 @@ const sessions = new Map();
 events.on('CMsgGCClientHello', (data, res, steamid) => {
     console.log('[HANDLER] ClientHello');
 
-    const accountId = steamid ? Number(BigInt(steamid) & 0xFFFFFFFFn) : 0;
-    if (!accountId) {
+    const AccountId = steamid ? Number(BigInt(steamid) & 0xFFFFFFFFn) : 0;
+    if (!AccountId) {
         console.log('[ERROR] No steamid received');
         return;
     }
 
 //    const accountId = Number(BigInt(steamid) & 0xFFFFFFFFn);
     const accId = getOrCreateSession(steamid)
-    console.log(`[HANDLER] accountId: ${accountId}`);
+    console.log(`[HANDLER] accountId: ${AccountId}`);
 
-    let session = loadPlayer(accountId);
+    let session = loadPlayer(AccountId);
     if (!session) {
         session = {
-            accountId: accountId,
+            accountId: AccountId,
             rankings: {
-                competitive: { rank: 1, wins: 0 },
-                wingman: { rank: 1, wins: 0 },
-                dangerzone: { rank: 1, wins: 0 }
+                competitive: {
+                    rank: 1,
+                    wins: 0
+                },
+                wingman: {
+                    rank: 1,
+                    wins: 0
+                },
+                dangerzone: {
+                    rank: 1,
+                    wins: 0
+                }
             },
+            playerLevel: 0,
+            playerCurXp: 0,
             matchmaking: false,
             matchId: null,
             partyId: null,
             lastPing: Date.now(),
             isInitiatedMMSearchStop: false
         };
-        sessions.set(accountId, session)
-        savePlayer(accountId);
+        sessions.set(AccountId, session)
+        savePlayer(AccountId);
 
     }
 
 //    sessions.set(accountId, session);
 
-    const csWelcome = {
-        storeItemHash: 0,
-        timeplayedconsecutively: 0,
-        timeFirstPlayed: Math.floor(Date.now() / 1000),
-        lastTimePlayed: Math.floor(Date.now() / 1000),
-        lastIpAddress: 0,
-        gscookieid: Math.floor(Math.random() * 1000000000),
-        uniqueid: Math.floor(Math.random() * 1000000000)
+    const competitiverank = session.rankings.competitive.rank || 1;
+    const wingmanrank = session.rankings.wingman.rank || 1;
+    const dzrank = session.rankings.dangerzone.rank || 1;
+    const playerlevel = session.playerLevel || 1;
+    const playercurxp = session.playerCurXp || 1;
+
+    const csWelcome1 = {
+//        storeItemHash: 0,
+//        timeplayedconsecutively: 0,
+//        timeFirstPlayed: Math.floor(Date.now() / 1000),
+//        lastTimePlayed: Math.floor(Date.now() / 1000),
+//        lastIpAddress: 0,
+//        gscookieid: Math.floor(Math.random() * 1000000000),
+//        uniqueid: Math.floor(Math.random() * 1000000000)
+        status: 0
     };
 
-    const CsWelcomeType = root.lookupType('CMsgCStrike15Welcome');
-    const gamedata = CsWelcomeType.encode(csWelcome).finish();
+    const csWelcome2 = {
+
+        accountId: AccountId,
+        globalStats: {
+            playersOnline: 1000000,
+            serversOnline: 50000,
+            playersSearching: 5,
+            serversAvailable: 30000,
+            ongoingMatches: 5000,
+            searchTimeAvg: 30,
+            requiredAppidVersion: 13881,
+            rtime32Cur: Math.floor(Date.now() / 1000)
+        },
+        vac_banned: 0,
+        ranking: {
+            accountId: AccountId,
+            rankId: competitiverank,
+            wins: session.rankings.competitive.wins || 0,
+            rankTypeId: 6,
+            rankWindowStats: 0,
+            rankIfWin: Math.min(competitiverank + 1, 18), // не может быть выше 18
+            rankIfLose: Math.max(competitiverank - 1, 1), // не может быть ниже 1
+            rankIfTie: competitiverank
+        }, 
+        commendation: {
+            cmdFriendly: 1337,
+            cmdTeaching: 1488,
+            cmdLeader: 3257
+        },
+        playerLevel: playerlevel,
+        playerCurXp: playercurxp,
+        rankings: [
+            {
+                accountId: AccountId,
+                rankId: wingmanrank,
+                wins: session.rankings.wingman.wins || 0,
+                rankTypeId: 7,
+                rankWindowStats: 0,
+                rankIfWin: Math.min(wingmanrank + 1, 18),
+                rankIfLose: Math.max(wingmanrank - 1, 1),
+                rankIfTie: wingmanrank
+            },
+            {
+                accountId: AccountId,
+                rankId: dzrank,
+                wins: session.rankings.dangerzone.wins || 0,
+                rankTypeId: 10,
+                rankWindowStats: 0,
+                rankIfWin: Math.min(dzrank + 1, 18),
+                rankIfLose: Math.max(dzrank - 1, 1), 
+                rankIfTie: dzrank
+            }
+        ],
+    };
+
+    const CsWelcomeType1 = root.lookupType('CMsgConnectionStatus'); // CMsgCStrike15Welcome
+    const gamedata1 = CsWelcomeType1.encode(csWelcome1).finish();
+
+    const CsWelcomeType2 = root.lookupType('CMsgGCCStrike15_v2_MatchmakingGC2ClientHello');
+    const gamedata2 = CsWelcomeType2.encode(csWelcome2).finish();
 
     sendProto(res, 4004, 'CMsgGCClientWelcome', {
         version: 13881,
-        gameData: gamedata,
+        gameData: gamedata1,
         outofdate_subscribed_caches: [],
         uptodate_subscribed_caches: [],
         location: {
@@ -265,7 +361,7 @@ events.on('CMsgGCClientHello', (data, res, steamid) => {
             longitude: 37.6173,
             country: "RU"
         },
-        gameData2: Buffer.alloc(0),
+        gameData2: gamedata2, // Buffer.alloc(0),
         rtime32GcWelcomeTimestamp: Math.floor(Date.now() / 1000),
         currency: 0,
         balance: 0,
@@ -284,7 +380,7 @@ events.on('CMsgGCCStrike15_v2_MatchmakingClient2GCHello', (data, res, steamid) =
         return;
     }
 
-    console.log(`got Client2GCHello for id ${accountId}`);
+    console.log(`[DEBUG] got Client2GCHello for id ${accountId}`);
     
     sendProto(res, 9110, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientHello', {
         accountId: accountId,
@@ -401,7 +497,6 @@ events.on('CMsgGCCStrike15_v2_GetEventFavorites_Request', (data, res, steamid) =
 });
 
 events.on('CMsgGCCStrike15_v2_MatchmakingStop', (data, res, steamid) => {
-//    const accountId = data?.account_id || 100000000;
     const accountId = steamid;
     const session = sessions.get(accountId);
 
@@ -441,7 +536,6 @@ events.on('CMsgGCCStrike15_v2_MatchmakingStop', (data, res, steamid) => {
 });
 
 events.on('CMsgGCCStrike15_v2_MatchmakingClient2GCHello', (data, res, steamid) => {
-//    const accountId = data?.account_id || 100000000; 
     const accountId = steamid;
     const session = sessions.get(accountId);
 
@@ -486,7 +580,6 @@ events.on('CMsgGCCStrike15_v2_ClientGCRankUpdate', (data, res, steamid) => {
     let session = sessions.get(accountId);
     if (!session) {
         console.log(`[ERROR] Session not found for ${accountId}`);
-        // 1. Загружаем из файла, если есть
         session = loadPlayer(accountId);
         if (!session) {
             console.log(`[ERROR] No session on disk for ${accountId}`);
@@ -497,20 +590,24 @@ events.on('CMsgGCCStrike15_v2_ClientGCRankUpdate', (data, res, steamid) => {
     
     const competitiverank = session.rankings.competitive.rank || 1;
     const wingmanrank = session.rankings.wingman.rank || 1;
-    console.log(`[RANK UPDATE] for ${accountId}, competitive rank: ${rank}`);
+    const dzrank = session.rankings.dangerzone.rank || 1;
     
-    if (data.rankings.rankTypeId = 6) {
+    const requestedRankTypeId = data?.rankings?.[0]?.rankTypeId || 6;
+
+    console.log(`[RANK UPDATE] for ${accountId} for rank ${requestedRankTypeId}`);
+    
+    if (requestedRankTypeId === 6) {
         sendProto(res, 9194, 'CMsgGCCStrike15_v2_ClientGCRankUpdate', {
             rankings: [
                 {
                     accountId: accountId,
-                    rankId: rank,
+                    rankId: competitiverank,
                     wins: session.rankings.competitive.wins || 0,
                     rankTypeId: 6,
                     rankWindowStats: 0,
-                    rankIfWin: Math.min(competitiverank + 1, 18), // не может быть выше 18
-                    rankIfLose: Math.max(competitiverank - 1, 1), // не может быть ниже 1
-                    rankIfTie: rank
+                    rankIfWin: Math.min(competitiverank + 1, 18),
+                    rankIfLose: Math.max(competitiverank - 1, 1),
+                    rankIfTie: competitiverank
                 }
             ]
         });
@@ -519,13 +616,23 @@ events.on('CMsgGCCStrike15_v2_ClientGCRankUpdate', (data, res, steamid) => {
             rankings: [
                 {
                     accountId: accountId,
-                    rankId: rank,
+                    rankId: wingmanrank,
                     wins: session.rankings.wingman.wins || 0,
                     rankTypeId: 7,
                     rankWindowStats: 0,
-                    rankIfWin: Math.min(wingmanrank + 1, 18), // не может быть выше 18
-                    rankIfLose: Math.max(wingmanrank - 1, 1), // не может быть ниже 1
-                    rankIfTie: rank
+                    rankIfWin: Math.min(wingmanrank + 1, 18),
+                    rankIfLose: Math.max(wingmanrank - 1, 1),
+                    rankIfTie: wingmanrank
+                },
+                {
+                    accountId: accountId,
+                    rankId: dzrank,
+                    wins: session.rankings.dangerzone.wins || 0,
+                    rankTypeId: 10,
+                    rankWindowStats: 0,
+                    rankIfWin: Math.min(dzrank + 1, 18),
+                    rankIfLose: Math.max(dzrank - 1, 1),
+                    rankIfTie: dzrank
                 }
             ]
         });
@@ -574,9 +681,9 @@ const server = http.createServer((req, res) => {
 
 // params
 
-const PORT = 3257;
-const HOST = '192.168.1.40';
+const PORT = config.port;
+const HOST = config.host;
 
 server.listen(PORT, HOST, () => {
-    console.log(`Server running on ${HOST}:${PORT}`);
+    console.log(`[Notification] Server running on ${HOST}:${PORT}`);
 });
