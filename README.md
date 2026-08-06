@@ -11,14 +11,14 @@ This code sucks and not perfect, cuz its in active developing phase
 
 - connects to CSGO Legacy (with modified csgo_gc)
 - handles messages from client
-- session based client management
+- steamid-based client management
 
 ## Requirements
 
 - Node.js:
-npm
-http
-protobufjs
+npm,
+http,
+protobufjs,
 - CS:GO Legacy with modified `csgo_gc.dll` [from there](https://github.com/aka3257/csgo_gc-mm)
 
 ## Quick Start
