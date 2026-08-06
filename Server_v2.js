@@ -2,6 +2,8 @@ const http = require('http');
 const protobuf = require('protobufjs');
 const fs = require('fs');
 
+// config settings
+
 const CONFIG_FILE = './config.json'
 
 let config;
@@ -33,7 +35,9 @@ const DEVMODE = config.devmode;
 const DATA_DIR = config.PlayerData;
 
 if (DEVMODE === true) {
-    console.log('[Notification] Server started in debug mode')
+    console.log('[Notification] GC started in debug mode')
+} else {
+    console.log('[Notification] GC started in normal mode')
 }
 
 // id dictionary
@@ -287,11 +291,24 @@ events.on('CMsgGCClientHello', (data, res, steamid) => {
 //        lastIpAddress: 0,
 //        gscookieid: Math.floor(Math.random() * 1000000000),
 //        uniqueid: Math.floor(Math.random() * 1000000000)
-        status: 0
+////        status: 0,
+        valid: true,
+        publicProfile: true,
+        publicInventory: true,
+        vacBanned: false,
+        cyberCafe: false,
+        schoolAccount: false,
+        freeTrialAccount: false,
+        subscribed: true,
+        lowViolence: false,
+        limited: false,
+        trusted: true,
+        accountLocked: false,
+        communityBanned: false,
+        eligibleForCommunityMarket: true
     };
 
     const csWelcome2 = {
-
         accountId: AccountId,
         globalStats: {
             playersOnline: 1000000,
@@ -303,7 +320,7 @@ events.on('CMsgGCClientHello', (data, res, steamid) => {
             requiredAppidVersion: 13881,
             rtime32Cur: Math.floor(Date.now() / 1000)
         },
-        vac_banned: 0,
+        vacBanned: 0,
         ranking: {
             accountId: AccountId,
             rankId: competitiverank,
@@ -345,7 +362,7 @@ events.on('CMsgGCClientHello', (data, res, steamid) => {
         ],
     };
 
-    const CsWelcomeType1 = root.lookupType('CMsgConnectionStatus'); // CMsgCStrike15Welcome
+    const CsWelcomeType1 = root.lookupType('CMsgAccountDetails'); // CMsgCStrike15Welcome
     const gamedata1 = CsWelcomeType1.encode(csWelcome1).finish();
 
     const CsWelcomeType2 = root.lookupType('CMsgGCCStrike15_v2_MatchmakingGC2ClientHello');
@@ -497,26 +514,14 @@ events.on('CMsgGCCStrike15_v2_GetEventFavorites_Request', (data, res, steamid) =
 });
 
 events.on('CMsgGCCStrike15_v2_MatchmakingStop', (data, res, steamid) => {
-    const accountId = steamid;
-    const session = sessions.get(accountId);
-
-    console.log(`[MATCHMAKING STOP] Received for ${accountId}`);
-
-    if (!session) {
-        console.log(`[ERROR] Session not found for ${accountId}`);
+    const accountId = steamid ? Number(BigInt(steamid) & 0xFFFFFFFFn) : 0;
+    if (!accountId) {
+        console.log('[ERROR] No steamid received');
         return;
     }
-
-    if (session.isInitiatedMMSearchStop) {
-        console.log('[MATCHMAKING STOP] Already stopping, ignoring');
-        return;
-    }
-
-    session.isInitiatedMMSearchStop = true;
-    session.matchmaking = false;
 
     sendProto(res, 9104, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientUpdate', {
-        matchmaking: 2,
+        matchmaking: 0,
         waitingAccountIdSessions: [],
         globalStats: {
             playersOnline: 1000000,
@@ -531,7 +536,6 @@ events.on('CMsgGCCStrike15_v2_MatchmakingStop', (data, res, steamid) => {
         notes: []
     });
 
-    session.isInitiatedMMSearchStop = false;
     savePlayer(accountId);
 });
 
@@ -685,5 +689,5 @@ const PORT = config.port;
 const HOST = config.host;
 
 server.listen(PORT, HOST, () => {
-    console.log(`[Notification] Server running on ${HOST}:${PORT}`);
+    console.log(`[Notification] GC running on ${HOST}:${PORT}`);
 });
