@@ -17,7 +17,9 @@ try {
         port: 3257,
         PlayerData: './playerData',
         protoPath: './proto',
-        devmode: false
+        devmode: false,
+        serverVersion: '13881',
+        serverIp: '0.0.0.0'
     }
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(default_config, null, 2));
     config = default_config;
@@ -31,8 +33,10 @@ const root = protobuf.loadSync([
     `${config.protoPath}/gcsdk_gcmessages.proto`
 ]);
 
-const DEVMODE = config.devmode;
-const DATA_DIR = config.PlayerData;
+const DEVMODE = config.devmode; //debug mode
+const DATA_DIR = config.PlayerData; //self-explanatory
+const SERV_VER = config.serverVersion; //version that srcds requires
+const SERV_IP = config.serverIp; //ip for srcds, not used at that moment
 
 if (DEVMODE === true) {
     console.log('[Notification] GC started in debug mode')
@@ -43,6 +47,8 @@ if (DEVMODE === true) {
 // id dictionary
 
 const IDict = {
+    93: 'CMsgAccountDetails',
+    94: 'CMsgAccountDetailsResponse',
     4004: 'CMsgGCClientWelcome',
     4005: 'CMsgGCServerWelcome',
     4006: 'CMsgGCClientHello',
@@ -61,6 +67,8 @@ const IDict = {
     9194: 'CMsgGCCStrike15_v2_ClientGCRankUpdate',
     9201: 'CMsgGCCStrike15_v2_GetEventFavorites_Request',
     9203: 'CMsgGCCStrike15_v2_GetEventFavorites_Response',
+    9164: 'CMsgGCCStrike15_v2_ClientRequestJoinServerData',
+    4009: 'CMsgGCClientConnectionStatus',
 };
 
 function getMessageNameById(id) {
@@ -176,7 +184,7 @@ function getOrCreateSession(steamId) {
     let session = loadPlayer(accountId);
     if (!session) {
         session = {
-            accountId: accountId,
+            accountId: AccountId,
             rankings: {
                 competitive: {
                     rank: 1,
@@ -185,18 +193,40 @@ function getOrCreateSession(steamId) {
                 wingman: {
                     rank: 1,
                     wins: 0
+                },
+                dangerzone: {
+                    rank: 1,
+                    wins: 0
                 }
             },
-            matchmaking: false,
+            playerLevel: 1,
+            playerCurXp: 0,
             matchId: null,
             partyId: null,
+            matchmaking: false,
             lastPing: Date.now(),
-            isInitiatedMMSearchStop: false
+            isInitiatedMMSearchStop: false,
+            vacBanned: 0,
+            inventory: [],
+            cmd: {
+                friendly: 1,
+                teaching: 2,
+                leader: 3
+            },
+            vacBanned: 0
         };
         savePlayer(accountId, session);
-    }
-    sessions.set(accountId, session)
+    };
+    sessions.set(accountId, session);
     return { accountId, session };
+}
+
+function uint32ToIp(uint32) {
+    const octet1 = (uint32 >>> 24) & 0xFF;
+    const octet2 = (uint32 >>> 16) & 0xFF;
+    const octet3 = (uint32 >>> 8) & 0xFF;
+    const octet4 = uint32 & 0xFF;
+    return `${octet1}.${octet2}.${octet3}.${octet4}`;
 }
 
 // event handler
@@ -232,17 +262,18 @@ const events = new EventBus();
 const sessions = new Map();
 
 events.on('CMsgGCClientHello', (data, res, steamid) => {
-    console.log('[HANDLER] ClientHello');
 
     const AccountId = steamid ? Number(BigInt(steamid) & 0xFFFFFFFFn) : 0;
     if (!AccountId) {
-        console.log('[ERROR] No steamid received');
+        console.log(`[HANDLER] ClientHello from unknown id`);
         return;
-    }
+    } else {
+            console.log(`[HANDLER] ClientHello from ${AccountId}`);
+    };
 
 //    const accountId = Number(BigInt(steamid) & 0xFFFFFFFFn);
-    const accId = getOrCreateSession(steamid)
-    console.log(`[HANDLER] accountId: ${AccountId}`);
+//    const accId = getOrCreateSession(steamid)
+//    console.log(`[HANDLER] accountId: ${AccountId}`);
 
     let session = loadPlayer(AccountId);
     if (!session) {
@@ -262,13 +293,21 @@ events.on('CMsgGCClientHello', (data, res, steamid) => {
                     wins: 0
                 }
             },
-            playerLevel: 0,
+            playerLevel: 1,
             playerCurXp: 0,
-            matchmaking: false,
             matchId: null,
             partyId: null,
+            matchmaking: false,
             lastPing: Date.now(),
-            isInitiatedMMSearchStop: false
+            isInitiatedMMSearchStop: false,
+            vacBanned: 0,
+            inventory: [],
+            cmd: {
+                friendly: 1,
+                teaching: 2,
+                leader: 3
+            },
+            vacBanned: 0
         };
         sessions.set(AccountId, session)
         savePlayer(AccountId);
@@ -282,30 +321,19 @@ events.on('CMsgGCClientHello', (data, res, steamid) => {
     const dzrank = session.rankings.dangerzone.rank || 1;
     const playerlevel = session.playerLevel || 1;
     const playercurxp = session.playerCurXp || 1;
+    const cmdfriendly = session.cmd.friendly || 1;
+    const cmdteaching = session.cmd.teaching || 1;
+    const cmdleader = session.cmd.leader || 1;
 
     const csWelcome1 = {
-//        storeItemHash: 0,
-//        timeplayedconsecutively: 0,
-//        timeFirstPlayed: Math.floor(Date.now() / 1000),
-//        lastTimePlayed: Math.floor(Date.now() / 1000),
-//        lastIpAddress: 0,
-//        gscookieid: Math.floor(Math.random() * 1000000000),
-//        uniqueid: Math.floor(Math.random() * 1000000000)
+        storeItemHash: 0,
+        timeplayedconsecutively: 0,
+        timeFirstPlayed: Math.floor(Date.now() / 1000),
+        lastTimePlayed: Math.floor(Date.now() / 1000),
+        lastIpAddress: 0,
+        gscookieid: Math.floor(Math.random() * 1000000000),
+        uniqueid: Math.floor(Math.random() * 1000000000)
 ////        status: 0,
-        valid: true,
-        publicProfile: true,
-        publicInventory: true,
-        vacBanned: false,
-        cyberCafe: false,
-        schoolAccount: false,
-        freeTrialAccount: false,
-        subscribed: true,
-        lowViolence: false,
-        limited: false,
-        trusted: true,
-        accountLocked: false,
-        communityBanned: false,
-        eligibleForCommunityMarket: true
     };
 
     const csWelcome2 = {
@@ -332,9 +360,9 @@ events.on('CMsgGCClientHello', (data, res, steamid) => {
             rankIfTie: competitiverank
         }, 
         commendation: {
-            cmdFriendly: 1337,
-            cmdTeaching: 1488,
-            cmdLeader: 3257
+            cmdFriendly: cmdfriendly,
+            cmdTeaching: cmdteaching,
+            cmdLeader: cmdleader
         },
         playerLevel: playerlevel,
         playerCurXp: playercurxp,
@@ -362,14 +390,41 @@ events.on('CMsgGCClientHello', (data, res, steamid) => {
         ],
     };
 
-    const CsWelcomeType1 = root.lookupType('CMsgAccountDetails'); // CMsgCStrike15Welcome
+    const csWelcome3 = {
+        valid: true,
+        publicProfile: true,
+        publicInventory: true,
+        vacBanned: false,
+        cyberCafe: false,
+        schoolAccount: false,
+        freeTrialAccount: false,
+        subscribed: true,
+        lowViolence: false,
+        limited: false,
+        trusted: true,
+        accountLocked: false,
+        communityBanned: false,
+        eligibleForCommunityMarket: true
+    };
+
+    const connectstatus = {
+        status: 0,
+    }
+
+    const CsWelcomeType1 = root.lookupType('CMsgCStrike15Welcome');
     const gamedata1 = CsWelcomeType1.encode(csWelcome1).finish();
 
     const CsWelcomeType2 = root.lookupType('CMsgGCCStrike15_v2_MatchmakingGC2ClientHello');
     const gamedata2 = CsWelcomeType2.encode(csWelcome2).finish();
 
+    const CsWelcomeType3 = root.lookupType('CMsgAccountDetails');
+    const gamedata3 = CsWelcomeType3.encode(csWelcome3).finish();
+
+    const CsWelcomeType4 = root.lookupType('CMsgGCClientConnectionStatus');
+    const gamedata4 = CsWelcomeType4.encode(connectstatus).finish();
+
     sendProto(res, 4004, 'CMsgGCClientWelcome', {
-        version: 13881,
+        version: 1575,
         gameData: gamedata1,
         outofdate_subscribed_caches: [],
         uptodate_subscribed_caches: [],
@@ -378,85 +433,38 @@ events.on('CMsgGCClientHello', (data, res, steamid) => {
             longitude: 37.6173,
             country: "RU"
         },
-        gameData2: gamedata2, // Buffer.alloc(0),
+        gameData2: Buffer.concat([gamedata2, gamedata3, gamedata4]),
         rtime32GcWelcomeTimestamp: Math.floor(Date.now() / 1000),
         currency: 0,
         balance: 0,
         balanceUrl: "",
-        txnCountryCode: "RU"
+        txnCountryCode: "RU",
     });
 });
 
 events.on('CMsgGCCStrike15_v2_MatchmakingClient2GCHello', (data, res, steamid) => {
-//    const accountId = data?.account_id || 100000000; 
-    const accountId = steamid;
-    const session = sessions.get(accountId);
 
-    if (!session) {
-        console.log(`[ERROR] Session not found for ${accountId}`);
+    const AccountId = steamid ? Number(BigInt(steamid) & 0xFFFFFFFFn) : 0;
+    if (!AccountId) {
+        console.log(`[HANDLER] MatchmakingClient2GCHello from unknown id`);
         return;
-    }
+    } else {
+            console.log(`[HANDLER] MatchmakingClient2GCHello from ${AccountId}`);
+    };
 
-    console.log(`[DEBUG] got Client2GCHello for id ${accountId}`);
+    let session = loadPlayer(AccountId);
+
+    const competitiverank = session.rankings.competitive.rank || 1;
+    const wingmanrank = session.rankings.wingman.rank || 1;
+    const dzrank = session.rankings.dangerzone.rank || 1;
+    const playerlevel = session.playerLevel || 1;
+    const playercurxp = session.playerCurXp || 1;
+    const cmdfriendly = session.cmd.friendly || 1;
+    const cmdteaching = session.cmd.teaching || 1;
+    const cmdleader = session.cmd.leader || 1;
     
     sendProto(res, 9110, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientHello', {
-        accountId: accountId,
-        ranking: {
-            accountId: accountId,
-            rankId: session.rankings.competitive.rank || 1,
-            wins: session.rankings.competitive.wins || 0,
-            rankTypeId: 6,
-            rankWindowStats: 0,
-            rankIfWin: 12,
-            rankIfLose: 10,
-            rankIfTie: 11
-        },
-        commendation: {
-            cmdFriendly: 1337,
-            cmdTeaching: 1488,
-            cmdLeader: 3257
-        },
-        playerLevel: 28,
-        playerCurXp: 11111,
-    });
-});
-
-events.on('CMsgGCCStrike15_v2_MatchmakingStart', (data, res, steamid) => {
-//    const accountIds = data?.account_ids || [];
-    const accountIds = steamid;
-    const accountId = accountIds[0] || null;
-    
-    const tempId = `temp_1`;
-    const session = sessions.get(tempId);
-    
-    if (!session) {
-        console.log(`[ERROR] Session not found for ${tempId}`);
-        return;
-    }
-    
-    if (accountId) {
-        session.accountId = accountId;
-        sessions.delete(tempId);
-        sessions.set(accountId, session);
-        
-        const oldPath = `${DATA_DIR}/${tempId}.json`;
-        const newPath = `${DATA_DIR}/${accountId}.json`;
-        if (fs.existsSync(oldPath)) {
-            fs.renameSync(oldPath, newPath);
-        }
-    }
-    
-    console.log(`[HANDLER] Matchmaking Start for ${accountId || tempId}`);
-    const gameType = data?.game_type || 0;
-    
-    if (session) {
-        session.matchmaking = true;
-        savePlayer(accountId || tempId);
-    }
-
-    sendProto(res, 9104, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientUpdate', {
-        matchmaking: 1,
-        waitingAccountIdSessions: [accountId || 100000000],
+        accountId: AccountId,
         globalStats: {
             playersOnline: 1000000,
             serversOnline: 50000,
@@ -467,9 +475,83 @@ events.on('CMsgGCCStrike15_v2_MatchmakingStart', (data, res, steamid) => {
             requiredAppidVersion: 13881,
             rtime32Cur: Math.floor(Date.now() / 1000)
         },
+        vacBanned: 0,
+        ranking: {
+            accountId: AccountId,
+            rankId: competitiverank,
+            wins: session.rankings.competitive.wins || 0,
+            rankTypeId: 6,
+            rankWindowStats: 0,
+            rankIfWin: Math.min(competitiverank + 1, 18),
+            rankIfLose: Math.max(competitiverank - 1, 1),
+            rankIfTie: competitiverank
+        }, 
+        commendation: {
+            cmdFriendly: cmdfriendly,
+            cmdTeaching: cmdteaching,
+            cmdLeader: cmdleader
+        },
+        playerLevel: playerlevel,
+        playerCurXp: playercurxp,
+        rankings: [
+            {
+                accountId: AccountId,
+                rankId: wingmanrank,
+                wins: session.rankings.wingman.wins || 0,
+                rankTypeId: 7,
+                rankWindowStats: 0,
+                rankIfWin: Math.min(wingmanrank + 1, 18),
+                rankIfLose: Math.max(wingmanrank - 1, 1),
+                rankIfTie: wingmanrank
+            },
+            {
+                accountId: AccountId,
+                rankId: dzrank,
+                wins: session.rankings.dangerzone.wins || 0,
+                rankTypeId: 10,
+                rankWindowStats: 0,
+                rankIfWin: Math.min(dzrank + 1, 18),
+                rankIfLose: Math.max(dzrank - 1, 1), 
+                rankIfTie: dzrank
+            }
+        ],
+    });
+});
+
+events.on('CMsgGCCStrike15_v2_MatchmakingStart', (data, res, steamid) => {
+
+    const AccountId = steamid ? Number(BigInt(steamid) & 0xFFFFFFFFn) : 0;
+    if (!AccountId) {
+        console.log(`[HANDLER] MatchmakingStart from unknown id`);
+        return;
+    } else {
+            console.log(`[HANDLER] MatchmakingStart from ${AccountId}`);
+    };
+    
+    let session = loadPlayer(AccountId);
+    const gameType = data?.game_type || 0;
+    
+    if (session) {
+        session.matchmaking = true;
+        savePlayer(AccountId);
+    }
+
+    sendProto(res, 9104, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientUpdate', {
+        matchmaking: 1,
+        waitingAccountIdSessions: [AccountId || 100000000],
+        globalStats: {
+            playersOnline: 2,
+            serversOnline: 1,
+            playersSearching: 1,
+            serversAvailable: 1,
+            ongoingMatches: 0,
+            searchTimeAvg: 30,
+            requiredAppidVersion: 1575,
+            rtime32Cur: Math.floor(Date.now() / 1000)
+        },
         notes: [
             {
-                type: 462552584,
+                type: gameType,
                 regionId: 0,
                 regionR: 0,
                 distance: 0
@@ -478,19 +560,29 @@ events.on('CMsgGCCStrike15_v2_MatchmakingStart', (data, res, steamid) => {
     });
 });
 
-events.on('CMsgGCCStrike15_v2_MatchmakingClient2ServerPing', (data, res) => {
-    console.log('[HANDLER] Ping');
+events.on('CMsgGCCStrike15_v2_MatchmakingClient2ServerPing', (data, res, steamid) => {
+
+    const gameType = data?.game_type || 0;
+
+    const AccountId = steamid ? Number(BigInt(steamid) & 0xFFFFFFFFn) : 0;
+    if (!AccountId) {
+        console.log(`[HANDLER] MatchmakingClient2ServerPing from unknown id`);
+        return;
+    } else {
+            console.log(`[HANDLER] MatchmakingClient2ServerPing from ${AccountId}`);
+    };
+
     sendProto(res, 9104, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientUpdate', {
         matchmaking: 1,
         waitingAccountIdSessions: [100000000],
         globalStats: {
-            playersOnline: 1000000,
-            serversOnline: 50000,
-            playersSearching: 5,
-            serversAvailable: 30000,
-            ongoingMatches: 5000,
+            playersOnline: 2,
+            serversOnline: 1,
+            playersSearching: 1,
+            serversAvailable: 1,
+            ongoingMatches: 0,
             searchTimeAvg: 30,
-            requiredAppidVersion: 13881,
+            requiredAppidVersion: 1575,
             rtime32Cur: Math.floor(Date.now() / 1000)
         },
         notes: [
@@ -514,82 +606,127 @@ events.on('CMsgGCCStrike15_v2_GetEventFavorites_Request', (data, res, steamid) =
 });
 
 events.on('CMsgGCCStrike15_v2_MatchmakingStop', (data, res, steamid) => {
-    const accountId = steamid ? Number(BigInt(steamid) & 0xFFFFFFFFn) : 0;
-    if (!accountId) {
-        console.log('[ERROR] No steamid received');
+    const AccountId = steamid ? Number(BigInt(steamid) & 0xFFFFFFFFn) : 0;
+    if (!AccountId) {
+        console.log(`[HANDLER] MatchmakingStop from unknown id`);
         return;
-    }
+    } else {
+            console.log(`[HANDLER] MatchmakingStop from ${AccountId}`);
+    };
 
     sendProto(res, 9104, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientUpdate', {
         matchmaking: 0,
         waitingAccountIdSessions: [],
         globalStats: {
-            playersOnline: 1000000,
-            serversOnline: 50000,
-            playersSearching: 0,
-            serversAvailable: 30000,
-            ongoingMatches: 5000,
+            playersOnline: 2,
+            serversOnline: 0,
+            playersSearching: 1,
+            serversAvailable: 1,
+            ongoingMatches: 0,
             searchTimeAvg: 30,
-            requiredAppidVersion: 13881,
+            requiredAppidVersion: 1575,
             rtime32Cur: Math.floor(Date.now() / 1000)
         },
         notes: []
     });
 
-    savePlayer(accountId);
+    savePlayer(AccountId);
 });
 
 events.on('CMsgGCCStrike15_v2_MatchmakingClient2GCHello', (data, res, steamid) => {
-    const accountId = steamid;
-    const session = sessions.get(accountId);
-
-    if (!session) {
-        console.log(`[ERROR] Session not found for ${accountId}`);
+    const AccountId = steamid ? Number(BigInt(steamid) & 0xFFFFFFFFn) : 0;
+    if (!AccountId) {
+        console.log(`[HANDLER] MatchmakingClient2GCHello from unknown id`);
         return;
-    }
+    } else {
+            console.log(`[HANDLER] MatchmakingClient2GCHello from ${AccountId}`);
+    };
 
-    console.log(`got Client2GCHello for id ${accountId}`);
+    let session = loadPlayer(AccountId);
     
+    const competitiverank = session.rankings.competitive.rank || 1;
+    const wingmanrank = session.rankings.wingman.rank || 1;
+    const dzrank = session.rankings.dangerzone.rank || 1;
+    const playerlevel = session.playerLevel || 1;
+    const playercurxp = session.playerCurXp || 1;
+    const cmdfriendly = session.cmd.friendly || 1;
+    const cmdteaching = session.cmd.teaching || 1;
+    const cmdleader = session.cmd.leader || 1;
+
     sendProto(res, 9110, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientHello', {
-        accountId: accountId,
+        accountId: AccountId,
+        globalStats: {
+            playersOnline: 2,
+            serversOnline: 0,
+            playersSearching: 1,
+            serversAvailable: 1,
+            ongoingMatches: 0,
+            searchTimeAvg: 30,
+            requiredAppidVersion: 1575,
+            rtime32Cur: Math.floor(Date.now() / 1000)
+        },
+        vacBanned: 0,
         ranking: {
-            accountId: accountId,
-            rankId: session.rankings.competitive.rank || 1,
+            accountId: AccountId,
+            rankId: competitiverank,
             wins: session.rankings.competitive.wins || 0,
             rankTypeId: 6,
             rankWindowStats: 0,
-            rankIfWin: 12,
-            rankIfLose: 10,
-            rankIfTie: 11
-        },
+            rankIfWin: Math.min(competitiverank + 1, 18),
+            rankIfLose: Math.max(competitiverank - 1, 1),
+            rankIfTie: competitiverank
+        }, 
         commendation: {
-            cmdFriendly: 1337,
-            cmdTeaching: 1488,
-            cmdLeader: 3257
+            cmdFriendly: cmdfriendly,
+            cmdTeaching: cmdteaching,
+            cmdLeader: cmdleader
         },
-        playerLevel: 28,
-        playerCurXp: 11111,
+        playerLevel: playerlevel,
+        playerCurXp: playercurxp,
+        rankings: [
+            {
+                accountId: AccountId,
+                rankId: wingmanrank,
+                wins: session.rankings.wingman.wins || 0,
+                rankTypeId: 7,
+                rankWindowStats: 0,
+                rankIfWin: Math.min(wingmanrank + 1, 18),
+                rankIfLose: Math.max(wingmanrank - 1, 1),
+                rankIfTie: wingmanrank
+            },
+            {
+                accountId: AccountId,
+                rankId: dzrank,
+                wins: session.rankings.dangerzone.wins || 0,
+                rankTypeId: 10,
+                rankWindowStats: 0,
+                rankIfWin: Math.min(dzrank + 1, 18),
+                rankIfLose: Math.max(dzrank - 1, 1), 
+                rankIfTie: dzrank
+            }
+        ]
     });
 });
 
 events.on('CMsgGCCStrike15_v2_ClientGCRankUpdate', (data, res, steamid) => {
-    console.log('[RANK UPDATE] Received');
     
-    const accountId = steamid ? Number(BigInt(steamid) & 0xFFFFFFFFn) : 0;
-    if (!accountId) {
-        console.log('[ERROR] No steamid received');
+    const AccountId = steamid ? Number(BigInt(steamid) & 0xFFFFFFFFn) : 0;
+    if (!AccountId) {
+        console.log(`[RANK UPDATE] Received from unknown id`);
         return;
-    }
+    } else {
+            console.log(`[RANK UPDATE] Received from ${AccountId}`);
+    };
 
-    let session = sessions.get(accountId);
+    let session = sessions.get(AccountId);
     if (!session) {
-        console.log(`[ERROR] Session not found for ${accountId}`);
-        session = loadPlayer(accountId);
+        console.log(`[ERROR] Session not found for ${AccountId}`);
+        session = loadPlayer(AccountId);
         if (!session) {
-            console.log(`[ERROR] No session on disk for ${accountId}`);
+            console.log(`[ERROR] No session on disk for ${AccountId}`);
             return;
         }
-        sessions.set(accountId, session);
+        sessions.set(AccountId, session);
     }
     
     const competitiverank = session.rankings.competitive.rank || 1;
@@ -598,13 +735,13 @@ events.on('CMsgGCCStrike15_v2_ClientGCRankUpdate', (data, res, steamid) => {
     
     const requestedRankTypeId = data?.rankings?.[0]?.rankTypeId || 6;
 
-    console.log(`[RANK UPDATE] for ${accountId} for rank ${requestedRankTypeId}`);
+    console.log(`[RANK UPDATE] for ${AccountId} for rank ${requestedRankTypeId}`);
     
     if (requestedRankTypeId === 6) {
         sendProto(res, 9194, 'CMsgGCCStrike15_v2_ClientGCRankUpdate', {
             rankings: [
                 {
-                    accountId: accountId,
+                    accountId: AccountId,
                     rankId: competitiverank,
                     wins: session.rankings.competitive.wins || 0,
                     rankTypeId: 6,
@@ -619,7 +756,7 @@ events.on('CMsgGCCStrike15_v2_ClientGCRankUpdate', (data, res, steamid) => {
         sendProto(res, 9194, 'CMsgGCCStrike15_v2_ClientGCRankUpdate', {
             rankings: [
                 {
-                    accountId: accountId,
+                    accountId: AccountId,
                     rankId: wingmanrank,
                     wins: session.rankings.wingman.wins || 0,
                     rankTypeId: 7,
@@ -629,7 +766,7 @@ events.on('CMsgGCCStrike15_v2_ClientGCRankUpdate', (data, res, steamid) => {
                     rankIfTie: wingmanrank
                 },
                 {
-                    accountId: accountId,
+                    accountId: AccountId,
                     rankId: dzrank,
                     wins: session.rankings.dangerzone.wins || 0,
                     rankTypeId: 10,
@@ -644,10 +781,89 @@ events.on('CMsgGCCStrike15_v2_ClientGCRankUpdate', (data, res, steamid) => {
 
 });
 
-events.on('CMsgGCCStrike15_v2_Party_Register', (data, res) => {
+events.on('CMsgGCCStrike15_v2_Party_Register', (data, res, steamid) => {
     console.log('[PARTY] Register');
     sendProto(res, 9190, 'CMsgGCCStrike15_v2_Party_Unregister', {});
 });
+
+events.on('CMsgGCCStrike15_v2_ClientRequestJoinServerData', (data, res, steamid) => {
+    
+    const AccountId = steamid ? Number(BigInt(steamid) & 0xFFFFFFFFn) : 0;
+    if (!AccountId) {
+        console.log(`[HANDLER] ClientRequestJoinServerData from unknown id`);
+        return;
+    } else {
+            console.log(`[HANDLER] ClientRequestJoinServerData from ${AccountId}`);
+    };
+
+    let session = loadPlayer(AccountId);
+
+    const competitiverank = session.rankings.competitive.rank || 1;
+    const wingmanrank = session.rankings.wingman.rank || 1;
+    const dzrank = session.rankings.dangerzone.rank || 1;
+    const playerlevel = session.playerLevel || 1;
+    const playercurxp = session.playerCurXp || 1;
+    const cmdfriendly = session.cmd.friendly || 1;
+    const cmdteaching = session.cmd.teaching || 1;
+    const cmdleader = session.cmd.leader || 1;
+
+    const readableIp = uint32ToIp(data.serverIp)
+
+    sendProto(res, 9164, 'CMsgGCCStrike15_v2_ClientRequestJoinServerData', {
+        version: data.version,
+        accountId: data.accountId,
+        serverid: data.serverid,
+        serverIp: data.serverIp,
+        serverPort: data.serverPort,
+        res: {
+            serverid: data.serverid,
+            directUdpIp: data.serverIp,
+            directUdpPort: data.serverPort,
+            reservationid: Math.floor(Math.random() * 1000000),
+            reservation: {
+                accountIds: [AccountId],
+                gameType: 2,
+                matchId: 1488,
+                serverVersion: SERV_VER,
+                rankings: [
+                    {
+                        accountId: AccountId,
+                        rankId: competitiverank,
+                        wins: session.rankings.competitive.wins || 0,
+                        rankTypeId: 6,
+                        rankWindowStats: 0,
+                        rankIfWin: Math.min(competitiverank + 1, 18),
+                        rankIfLose: Math.max(competitiverank - 1, 1),
+                        rankIfTie: competitiverank
+                    },
+                    {
+                        accountId: AccountId,
+                        rankId: wingmanrank,
+                        wins: session.rankings.wingman.wins || 0,
+                        rankTypeId: 7,
+                        rankWindowStats: 0,
+                        rankIfWin: Math.min(wingmanrank + 1, 18),
+                        rankIfLose: Math.max(wingmanrank - 1, 1),
+                        rankIfTie: wingmanrank
+                    },
+                    {
+                        accountId: AccountId,
+                        rankId: dzrank,
+                        wins: session.rankings.dangerzone.wins || 0,
+                        rankTypeId: 10,
+                        rankWindowStats: 0,
+                        rankIfWin: Math.min(dzrank + 1, 18),
+                        rankIfLose: Math.max(dzrank - 1, 1),
+                        rankIfTie: dzrank
+                    }
+                ],
+                encryptionKey: Math.floor(Math.random() * 1000000)
+            },
+            map: "de_lake",
+            serverAddress: `${readableIp}:${data.serverPort}`
+        }
+    })
+})
 
 // server body
 
