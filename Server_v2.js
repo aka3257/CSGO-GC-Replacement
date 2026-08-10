@@ -30,7 +30,8 @@ try {
 const root = protobuf.loadSync([
     `${config.protoPath}/gcsystemmsgs.proto`,
     `${config.protoPath}/cstrike15_usermessages.proto`,
-    `${config.protoPath}/gcsdk_gcmessages.proto`
+    `${config.protoPath}/gcsdk_gcmessages.proto`,
+    `${config.protoPath}/steammessages_gc.proto`
 ]);
 
 const DEVMODE = config.devmode; //debug mode
@@ -48,6 +49,7 @@ if (DEVMODE === true) {
 
 const IDict = {
     93: 'CMsgAccountDetails',
+    1488: 'CGCSystemMsg_GetAccountDetails_Response',
     94: 'CMsgAccountDetailsResponse',
     4004: 'CMsgGCClientWelcome',
     4005: 'CMsgGCServerWelcome',
@@ -333,19 +335,18 @@ events.on('CMsgGCClientHello', (data, res, steamid) => {
         lastIpAddress: 0,
         gscookieid: Math.floor(Math.random() * 1000000000),
         uniqueid: Math.floor(Math.random() * 1000000000)
-////        status: 0,
     };
 
     const csWelcome2 = {
         accountId: AccountId,
         globalStats: {
-            playersOnline: 1000000,
-            serversOnline: 50000,
-            playersSearching: 5,
-            serversAvailable: 30000,
-            ongoingMatches: 5000,
+            playersOnline: 2,
+            serversOnline: 1,
+            playersSearching: 1,
+            serversAvailable: 1,
+            ongoingMatches: 0,
             searchTimeAvg: 30,
-            requiredAppidVersion: 13881,
+            requiredAppidVersion: 1575,
             rtime32Cur: Math.floor(Date.now() / 1000)
         },
         vacBanned: 0,
@@ -391,24 +392,41 @@ events.on('CMsgGCClientHello', (data, res, steamid) => {
     };
 
     const csWelcome3 = {
-        valid: true,
-        publicProfile: true,
-        publicInventory: true,
-        vacBanned: false,
-        cyberCafe: false,
-        schoolAccount: false,
-        freeTrialAccount: false,
-        subscribed: true,
-        lowViolence: false,
-        limited: false,
-        trusted: true,
-        accountLocked: false,
-        communityBanned: false,
-        eligibleForCommunityMarket: true
+        accountName: AccountId,
+        isProfilePublic: true,
+        isInventoryPublic: true,
+        isVacBanned: false,
+        isCyberCafe: false,
+        isSchoolAccount: false,
+        isLimited: false,
+        isSubscribed: false,
+        isFreeTrialAccount: false,
+        accountid: AccountId,
+        currency: "RUB",
+        steamLevel: 1488,
+        friendCount: 2,
+        isSteamguardEnabled: true,
+        isPhoneVerified: true,
+        isTwoFactorEnabled: true,
+//        valid: true,
+//        publicProfile: true,
+//        publicInventory: true,
+//        vacBanned: false,
+//        cyberCafe: false,
+//        schoolAccount: false,
+//        freeTrialAccount: false,
+//        subscribed: true,
+//        lowViolence: false,
+//        limited: false,
+//        trusted: true,
+//        accountLocked: false,
+//        communityBanned: false,
+//        eligibleForCommunityMarket: true
     };
 
     const connectstatus = {
         status: 0,
+        clientSessionNeed: 3
     }
 
     const CsWelcomeType1 = root.lookupType('CMsgCStrike15Welcome');
@@ -417,7 +435,7 @@ events.on('CMsgGCClientHello', (data, res, steamid) => {
     const CsWelcomeType2 = root.lookupType('CMsgGCCStrike15_v2_MatchmakingGC2ClientHello');
     const gamedata2 = CsWelcomeType2.encode(csWelcome2).finish();
 
-    const CsWelcomeType3 = root.lookupType('CMsgAccountDetails');
+    const CsWelcomeType3 = root.lookupType('CGCSystemMsg_GetAccountDetails_Response');
     const gamedata3 = CsWelcomeType3.encode(csWelcome3).finish();
 
     const CsWelcomeType4 = root.lookupType('CMsgGCClientConnectionStatus');
@@ -426,14 +444,14 @@ events.on('CMsgGCClientHello', (data, res, steamid) => {
     sendProto(res, 4004, 'CMsgGCClientWelcome', {
         version: 1575,
         gameData: gamedata1,
-        outofdate_subscribed_caches: [],
-        uptodate_subscribed_caches: [],
+        outofdateSubscribedCaches: [],
+        uptodateSubscribedCaches: [],
         location: {
             latitude: 55.7558,
             longitude: 37.6173,
             country: "RU"
         },
-        gameData2: Buffer.concat([gamedata2, gamedata3, gamedata4]),
+        gameData2: Buffer.concat([gamedata1, gamedata2, gamedata3]),
         rtime32GcWelcomeTimestamp: Math.floor(Date.now() / 1000),
         currency: 0,
         balance: 0,
@@ -466,13 +484,13 @@ events.on('CMsgGCCStrike15_v2_MatchmakingClient2GCHello', (data, res, steamid) =
     sendProto(res, 9110, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientHello', {
         accountId: AccountId,
         globalStats: {
-            playersOnline: 1000000,
-            serversOnline: 50000,
-            playersSearching: 5,
-            serversAvailable: 30000,
-            ongoingMatches: 5000,
+            playersOnline: 2,
+            serversOnline: 1,
+            playersSearching: 1,
+            serversAvailable: 1,
+            ongoingMatches: 0,
             searchTimeAvg: 30,
-            requiredAppidVersion: 13881,
+            requiredAppidVersion: 1575,
             rtime32Cur: Math.floor(Date.now() / 1000)
         },
         vacBanned: 0,
@@ -857,7 +875,15 @@ events.on('CMsgGCCStrike15_v2_ClientRequestJoinServerData', (data, res, steamid)
                         rankIfTie: dzrank
                     }
                 ],
-                encryptionKey: Math.floor(Math.random() * 1000000)
+                encryptionKey: Math.floor(Math.random() * 1000000),
+                encryptionKeyPub: Math.floor(Math.random() * 1000000),
+                whitelist: [],
+                preMatchData: {
+                    teamStats: [],
+                    draft: [],
+                    stats: [],
+                    wins: 0
+                }
             },
             map: "de_lake",
             serverAddress: `${readableIp}:${data.serverPort}`
