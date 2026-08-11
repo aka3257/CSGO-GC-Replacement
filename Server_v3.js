@@ -1,4 +1,4 @@
-const http = require('http');
+const net = require('net');
 const protobuf = require('protobufjs');
 const fs = require('fs');
 
@@ -136,12 +136,17 @@ function sendProto(res, msgType, protoName, object) {
     }
 }
 
-function getMSGdata(data) {
+function getMSGdata(buffer) {
     try {
-        const parsed = JSON.parse(data.toString());
-        const msgId = parsed.msgType & 0x7FFFFFFF;
+        // Читаем steamid (первые 8 байт, little-endian)
+        const steamId = buffer.readBigUInt64LE(0);
+        // Читаем msgType (следующие 4 байта)
+        const msgId = buffer.readUInt32LE(8);
+        // Получаем имя сообщения
         const messageName = getMessageNameById(msgId);
-        const steamId = parsed.steamid || 0;
+        // Протобуф-данные начинаются с 12 байта
+        const protoData = buffer.subarray(12);
+
         if (DEVMODE === true) {
             console.log(`[DEBUG] MsgType: ${msgId}, Name: ${messageName || 'UNKNOWN'}, steamid: ${steamId}`);
         }
@@ -149,9 +154,7 @@ function getMSGdata(data) {
             console.log('[ERROR] Unknown message');
             return null;
         }
-        
-        const payload = Buffer.from(parsed.data, 'hex');
-        const protoData = payload.subarray(8);
+
         const MessageType = root.lookupType(messageName);
         const decoded = MessageType.decode(protoData);
         if (DEVMODE === true) {
@@ -908,36 +911,21 @@ events.on('CMsgGCCStrike15_v2_ClientRequestJoinServerData', (data, res, steamid)
 
 // server body
 
-const server = http.createServer((req, res) => {
-    console.log('Client connected');
-    if (req.method === "POST" && req.url === '/gc') {
-        let body = [];
-        req.on('data', (chunk) => body.push(chunk));
-        req.on('end', () => {
-            try {
-                const buffer = Buffer.concat(body);
-                const decoded = getMSGdata(buffer);
-                if (decoded) {
-                    events.emit(decoded.name, decoded.data, res, decoded.steamid);
-                } else {
-                    const parsed = JSON.parse(buffer.toString());
-                    const msgId = parsed.msgType & 0x7FFFFFFF;
-                    res.writeHead(200, {
-                        'Content-Type': 'application/json',
-                        'Content-Length': Buffer.byteLength(JSON.stringify({ status: 'ok' }))
-                    });
-                    res.end(JSON.stringify({ status: 'ok' }));
-                }
-            } catch (err) {
-                console.error('[ERROR]', err);
-                res.writeHead(500);
-                res.end(JSON.stringify({ error: err.message }));
-            }
-        });
-    } else {
-        res.writeHead(404);
-        res.end('Not found');
-    }
+// Вместо http.createServer
+const server = net.createServer((socket) => {
+    console.log('Клиент подключился');
+
+    socket.on('data', (data) => {
+        const decoded = getMSGdata(data);
+        if (decoded) {
+            // Теперь ты можешь отправлять ответ(ы) через socket.write()
+            events.emit(decoded.name, decoded.data, socket);
+        }
+    });
+
+    socket.on('end', () => {
+        console.log('Клиент отключился');
+    });
 });
 
 // params
