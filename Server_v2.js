@@ -28,10 +28,12 @@ try {
 }
 
 const root = protobuf.loadSync([
-    `${config.protoPath}/gcsystemmsgs.proto`,
-    `${config.protoPath}/cstrike15_usermessages.proto`,
+    `${config.protoPath}/base_gcmessages.proto`,
+    `${config.protoPath}/cstrike15_gcmessages.proto`,
+    `${config.protoPath}/econ_gcmessages.proto`,
+    `${config.protoPath}/engine_gcmessages.proto`,
     `${config.protoPath}/gcsdk_gcmessages.proto`,
-    `${config.protoPath}/steammessages_gc.proto`
+    `${config.protoPath}/gcsystemmsgs.proto`
 ]);
 
 const DEVMODE = config.devmode; //debug mode
@@ -49,11 +51,10 @@ if (DEVMODE === true) {
 
 const IDict = {
     93: 'CMsgAccountDetails',
-    1488: 'CGCSystemMsg_GetAccountDetails_Response',
     94: 'CMsgAccountDetailsResponse',
-    4004: 'CMsgGCClientWelcome',
+    4004: 'CMsgClientWelcome',
     4005: 'CMsgGCServerWelcome',
-    4006: 'CMsgGCClientHello',
+    4006: 'CMsgClientHello',
     4007: 'CMsgGCServerHello',
     9101: 'CMsgGCCStrike15_v2_MatchmakingStart',
     9102: 'CMsgGCCStrike15_v2_MatchmakingStop',
@@ -263,7 +264,7 @@ const events = new EventBus();
 
 const sessions = new Map();
 
-events.on('CMsgGCClientHello', (data, res, steamid) => {
+events.on('CMsgClientHello', (data, res, steamid) => {
 
     const AccountId = steamid ? Number(BigInt(steamid) & 0xFFFFFFFFn) : 0;
     if (!AccountId) {
@@ -330,11 +331,11 @@ events.on('CMsgGCClientHello', (data, res, steamid) => {
     const csWelcome1 = {
         storeItemHash: 0,
         timeplayedconsecutively: 0,
-        timeFirstPlayed: Math.floor(Date.now() / 1000),
-        lastTimePlayed: Math.floor(Date.now() / 1000),
+        timeFirstPlayed: 0,
+        lastTimePlayed: 0,
         lastIpAddress: 0,
-        gscookieid: Math.floor(Math.random() * 1000000000),
-        uniqueid: Math.floor(Math.random() * 1000000000)
+        gscookieid: 1488,
+        uniqueid: 1488
     };
 
     const csWelcome2 = {
@@ -392,42 +393,54 @@ events.on('CMsgGCClientHello', (data, res, steamid) => {
     };
 
     const csWelcome3 = {
+        valid: true,
         accountName: AccountId,
-        isProfilePublic: true,
-        isInventoryPublic: true,
-        isVacBanned: false,
-        isCyberCafe: false,
-        isSchoolAccount: false,
-        isLimited: false,
-        isSubscribed: false,
-        isFreeTrialAccount: false,
-        accountid: AccountId,
-        currency: "RUB",
-        steamLevel: 1488,
-        friendCount: 2,
-        isSteamguardEnabled: true,
-        isPhoneVerified: true,
-        isTwoFactorEnabled: true,
-//        valid: true,
-//        publicProfile: true,
-//        publicInventory: true,
-//        vacBanned: false,
-//        cyberCafe: false,
-//        schoolAccount: false,
-//        freeTrialAccount: false,
-//        subscribed: true,
-//        lowViolence: false,
-//        limited: false,
-//        trusted: true,
-//        accountLocked: false,
-//        communityBanned: false,
-//        eligibleForCommunityMarket: true
+        publicProfile: true,
+        publicInventory: true,
+        vacBanned: false,
+        cyberCafe: false,
+        schoolAccount: false,
+        freeTrialAccount: false,
+        subscribed: true,
+        lowViolence: false,
+        limited: false,
+        trusted: true,
+        package: 0,
+        accountLocked: false,
+        communityBanned: false,
+        eligibleForCommunityMarket: true
     };
 
-    const connectstatus = {
+    const socacheSubscribed = {
+        objects: [
+            {
+                type_id: 1,
+                object_data: []
+            }
+        ],
+        version: 1575,
+        owner_soid: {
+            type: 1,
+            id: AccountId
+        }
+    };
+
+    const socacheCheck = {
+        version: 1575,
+        owner_soid: {
+            type: 1,
+            id: AccountId
+        }
+    };
+
+    const ConnectionStatus = {
         status: 0,
-        clientSessionNeed: 3
-    }
+        clientSessionNeed: 0,
+        queuePosition: 0,
+        queueSize: 0,
+        waitSeconds: 0,
+        estimatedWaitSecondsRemaining: 0
+    };
 
     const CsWelcomeType1 = root.lookupType('CMsgCStrike15Welcome');
     const gamedata1 = CsWelcomeType1.encode(csWelcome1).finish();
@@ -435,23 +448,23 @@ events.on('CMsgGCClientHello', (data, res, steamid) => {
     const CsWelcomeType2 = root.lookupType('CMsgGCCStrike15_v2_MatchmakingGC2ClientHello');
     const gamedata2 = CsWelcomeType2.encode(csWelcome2).finish();
 
-    const CsWelcomeType3 = root.lookupType('CGCSystemMsg_GetAccountDetails_Response');
+    const CsWelcomeType3 = root.lookupType('CMsgAccountDetails');
     const gamedata3 = CsWelcomeType3.encode(csWelcome3).finish();
 
-    const CsWelcomeType4 = root.lookupType('CMsgGCClientConnectionStatus');
-    const gamedata4 = CsWelcomeType4.encode(connectstatus).finish();
+    const CsWelcomeType4 = root.lookupType('CMsgConnectionStatus');
+    const gamedata4 = CsWelcomeType4.encode(ConnectionStatus).finish();
 
-    sendProto(res, 4004, 'CMsgGCClientWelcome', {
+    sendProto(res, 4004, 'CMsgClientWelcome', {
         version: 1575,
         gameData: gamedata1,
-        outofdateSubscribedCaches: [],
-        uptodateSubscribedCaches: [],
+        outofdateSubscribedCaches: [socacheSubscribed],
+        uptodateSubscribedCaches: [socacheCheck],
         location: {
             latitude: 55.7558,
             longitude: 37.6173,
             country: "RU"
         },
-        gameData2: Buffer.concat([gamedata1, gamedata2, gamedata3]),
+        gameData2: Buffer.concat([gamedata1, gamedata2, gamedata3, gamedata4]),
         rtime32GcWelcomeTimestamp: Math.floor(Date.now() / 1000),
         currency: 0,
         balance: 0,
@@ -645,7 +658,9 @@ events.on('CMsgGCCStrike15_v2_MatchmakingStop', (data, res, steamid) => {
             requiredAppidVersion: 1575,
             rtime32Cur: Math.floor(Date.now() / 1000)
         },
-        notes: []
+        notes: [{
+            prime: true
+        }]
     });
 
     savePlayer(AccountId);
