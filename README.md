@@ -19,7 +19,7 @@ This code sucks and not perfect, cuz its in active developing phase
 npm,
 net,
 protobufjs,
-- CS:GO Legacy with modified `csgo_gc.dll` [from there](https://github.com/aka3257/csgo_gc-mm)
+- CS:GO Legacy with modified `csgo_gc.dll` [from here](https://github.com/aka3257/csgo_gc-mm/tree/tcp-beta)
 
 ## Quick Start
 
