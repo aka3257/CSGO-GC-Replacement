@@ -125,35 +125,25 @@ function encodeProto(msgType, protoName, object) {  // im too lazy to comment al
 
 function sendProto(socket, msgType, protoName, object, steamid = 0) {
     try {
-        if (DEVMODE === true) {
-            console.log('[DEBUG] Sent object:', JSON.stringify(object, null, 2));
-        }
         const Proto = root.lookupType(protoName);
         const message = Proto.fromObject(object);
         const payload = Proto.encode(message).finish();
 
         const finalMsgType = (0x80000000 | msgType) >>> 0;
         
-        // Формат: steamid (8) + msgType (4) + 0x00000000 (4) + 0x00000000 (4) + payload
-        const buffer = Buffer.alloc(12 + payload.length);
+        const totalLen = 8 + payload.length; // msgType (4) + header (4) + payload
+        const buffer = Buffer.alloc(4 + totalLen);
         
-        // steamid
-        const steamIdBigInt = BigInt(steamid || 0);
-        
-        //msgtype
-        buffer.writeUInt32LE(finalMsgType, 0);
-        
-        // protobuf-данные
-
+        buffer.writeUInt32LE(totalLen, 0);   // ← ПРЕФИКС ДЛИНЫ!
+        buffer.writeUInt32LE(finalMsgType, 4);
+        buffer.writeUInt32LE(0, 8);          // пустой CMsgProtoBufHeader
         payload.copy(buffer, 12);
 
-        console.log(`[DEBUG] Sending ${buffer.length} bytes`);
+        console.log(`[SENT] ${protoName} (${finalMsgType}) ${buffer.length} bytes, totalLen=${totalLen}`);
         socket.write(buffer);
-        console.log(`[SENT] ${protoName} (${finalMsgType})`);
         return true;
     } catch (err) {
         console.error(`[ERROR] sendProto:`, err.message);
-        socket.destroy();
         return false;
     }
 }
@@ -173,10 +163,10 @@ function getMSGdata(buffer) {
 
         // Protobuf-данные начинаются с 12-го байта
         const protoData = buffer.subarray(120);
-
-        console.log(`[DEBUG] steamId: ${AccountId}, msgId: ${msgId}, cleanMsgId: ${cleanMsgId}, name: ${messageName}`);
-        console.log(`[DEBUG] hex: ${buffer.toString('hex')}`);
-
+        if (DEVMODE === 1) {
+            console.log(`[DEBUG] steamId: ${AccountId}, msgId: ${msgId}, cleanMsgId: ${cleanMsgId}, name: ${messageName}`);
+            console.log(`[DEBUG] hex: ${buffer.toString('hex')}`);
+        }
         if (!messageName) {
             console.log('[ERROR] Unknown message');
             return null;
@@ -343,6 +333,60 @@ events.on('CMsgClientHello', (data, socket, steamid) => {
         uniqueid: 1488
     };
 
+    const csWelcome2 = {
+        accountId: steamid,
+        globalStats: {
+            playersOnline: 2,
+            serversOnline: 1,
+            playersSearching: 1,
+            serversAvailable: 1,
+            ongoingMatches: 0,
+            searchTimeAvg: 30,
+            requiredAppidVersion: 1575,
+            rtime32Cur: Math.floor(Date.now() / 1000)
+        },
+        vacBanned: 0,
+        ranking: {
+            accountId: steamid,
+            rankId: competitiverank,
+            wins: session.rankings.competitive.wins || 0,
+            rankTypeId: 6,
+            rankWindowStats: 0,
+            rankIfWin: Math.min(competitiverank + 1, 18),
+            rankIfLose: Math.max(competitiverank - 1, 1),
+            rankIfTie: competitiverank        },
+        commendation: {
+            cmdFriendly: cmdfriendly,
+            cmdTeaching: cmdteaching,
+            cmdLeader: cmdleader
+        },
+        medals: [],
+        playerLevel: playerlevel,
+        playerCurXp: playercurxp,
+        rankings: [
+            {
+                accountId: steamid,
+                rankId: wingmanrank,
+                wins: session.rankings.wingman.wins || 0,
+                rankTypeId: 7,
+                rankWindowStats: 0,
+                rankIfWin: Math.min(wingmanrank + 1, 18),
+                rankIfLose: Math.max(wingmanrank - 1, 1),
+                rankIfTie: wingmanrank
+            },
+            {
+                accountId: steamid,
+                rankId: dzrank,
+                wins: session.rankings.dangerzone.wins || 0,
+                rankTypeId: 10,
+                rankWindowStats: 0,
+                rankIfWin: Math.min(dzrank + 1, 18),
+                rankIfLose: Math.max(dzrank - 1, 1),
+                rankIfTie: dzrank
+            }
+        ]
+    }
+
     const csWelcome3 = {
         valid: true,
         accountName: steamid,
@@ -385,6 +429,9 @@ events.on('CMsgClientHello', (data, socket, steamid) => {
     const CsWelcomeType1 = root.lookupType('CMsgCStrike15Welcome');
     const gamedata1 = CsWelcomeType1.encode(csWelcome1).finish();
 
+    const CsWelcomeType2 = root.lookupType('CMsgGCCStrike15_v2_MatchmakingGC2ClientHello');
+    const gamedata2 = CsWelcomeType2.encode(csWelcome2).finish();
+
     const CsWelcomeType3 = root.lookupType('CMsgAccountDetails');
     const gamedata3 = CsWelcomeType3.encode(csWelcome3).finish();
 
@@ -401,103 +448,115 @@ events.on('CMsgClientHello', (data, socket, steamid) => {
             longitude: 37.6173,
             country: "RU"
         },
-        gameData2: [],
+        gameData2: gamedata2,
         rtime32GcWelcomeTimestamp: Math.floor(Date.now() / 1000),
         currency: 0,
         balance: 0,
         balanceUrl: "",
         txnCountryCode: "RU",
     }, steamid);
-//    sendProto(socket, 9110, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientHello', {
-//        accountId: steamid,
-//        globalStats: {
-//            playersOnline: 2,
-//            serversOnline: 1,
-//            playersSearching: 1,
-//            serversAvailable: 1,
-//            ongoingMatches: 0,
-//            searchTimeAvg: 30,
-//            requiredAppidVersion: 1575,
-//            rtime32Cur: Math.floor(Date.now() / 1000)
-//        },
-//        vacBanned: 0,
-//        ranking: {
-//            accountId: steamid,
-//            rankId: competitiverank,
-//            wins: session.rankings.competitive.wins || 0,
-//            rankTypeId: 6,
-//            rankWindowStats: 0,
-//            rankIfWin: Math.min(competitiverank + 1, 18),
-//            rankIfLose: Math.max(competitiverank - 1, 1),
-//            rankIfTie: competitiverank
-//        },
-//        commendation: {
-//            cmdFriendly: cmdfriendly,
-//            cmdTeaching: cmdteaching,
-//            cmdLeader: cmdleader
-//        },
-//        medals: [],
-//        playerLevel: playerlevel,
-//        playerCurXp: playercurxp,
-//        rankings: [
-//            {
-//                accountId: steamid,
-//                rankId: wingmanrank,
-//                wins: session.rankings.wingman.wins || 0,
-//                rankTypeId: 7,
-//                rankWindowStats: 0,
-//                rankIfWin: Math.min(wingmanrank + 1, 18),
-//                rankIfLose: Math.max(wingmanrank - 1, 1),
-//                rankIfTie: wingmanrank
-//            },
-//            {
-//                accountId: steamid,
-//                rankId: dzrank,
-//                wins: session.rankings.dangerzone.wins || 0,
-//                rankTypeId: 10,
-//                rankWindowStats: 0,
-//                rankIfWin: Math.min(dzrank + 1, 18),
-//                rankIfLose: Math.max(dzrank - 1, 1),
-//                rankIfTie: dzrank
-//            }
-//        ]
-//    }, steamid);
-//    sendProto(socket, 9194, 'CMsgGCCStrike15_v2_ClientGCRankUpdate', {
-//        rankings: [
-//            {
-//                accountId: steamid,
-//                rankId: competitiverank,
-//                wins: session.rankings.competitive.wins || 0,
-//                rankTypeId: 6,
-//                rankWindowStats: 0,
-//                rankIfWin: Math.min(competitiverank + 1, 18),
-//                rankIfLose: Math.max(competitiverank - 1, 1),
-//                rankIfTie: competitiverank
-//            },
-//            {
-//                accountId: steamid,
-//                rankId: wingmanrank,
-//                wins: session.rankings.wingman.wins || 0,
-//                rankTypeId: 7,
-//                rankWindowStats: 0,
-//                rankIfWin: Math.min(wingmanrank + 1, 18),
-//                rankIfLose: Math.max(wingmanrank - 1, 1),
-//                rankIfTie: wingmanrank
-//            },
-//            {
-//                accountId: steamid,
-//                rankId: dzrank,
-//                wins: session.rankings.dangerzone.wins || 0,
-//                rankTypeId: 10,
-//                rankWindowStats: 0,
-//                rankIfWin: Math.min(dzrank + 1, 18),
-//                rankIfLose: Math.max(dzrank - 1, 1),
-//                rankIfTie: dzrank
-//            }
-//        ]
-//    }, steamid);
-    // sendProto(socket, 4009, 'CMsgConnectionStatus', { status: 0, clientSessionNeed: 0 }); // опционально
+
+    sendProto(socket, 9110, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientHello', {
+        accountId: steamid,
+        globalStats: {
+            playersOnline: 2,
+            serversOnline: 1,
+            playersSearching: 1,
+            serversAvailable: 1,
+            ongoingMatches: 0,
+            searchTimeAvg: 30,
+            requiredAppidVersion: 1575,
+            rtime32Cur: Math.floor(Date.now() / 1000)
+        },
+        vacBanned: 0,
+        ranking: {
+            accountId: steamid,
+            rankId: competitiverank,
+            wins: session.rankings.competitive.wins || 0,
+            rankTypeId: 6,
+            rankWindowStats: 0,
+            rankIfWin: Math.min(competitiverank + 1, 18),
+            rankIfLose: Math.max(competitiverank - 1, 1),
+            rankIfTie: competitiverank        },
+        commendation: {
+            cmdFriendly: cmdfriendly,
+            cmdTeaching: cmdteaching,
+            cmdLeader: cmdleader
+        },
+        medals: [],
+        playerLevel: playerlevel,
+        playerCurXp: playercurxp,
+        rankings: [
+            {
+                accountId: steamid,
+                rankId: wingmanrank,
+                wins: session.rankings.wingman.wins || 0,
+                rankTypeId: 7,
+                rankWindowStats: 0,
+                rankIfWin: Math.min(wingmanrank + 1, 18),
+                rankIfLose: Math.max(wingmanrank - 1, 1),
+                rankIfTie: wingmanrank
+            },
+            {
+                accountId: steamid,
+                rankId: dzrank,
+                wins: session.rankings.dangerzone.wins || 0,
+                rankTypeId: 10,
+                rankWindowStats: 0,
+                rankIfWin: Math.min(dzrank + 1, 18),
+                rankIfLose: Math.max(dzrank - 1, 1),
+                rankIfTie: dzrank
+            }
+        ]
+    }, steamid);
+
+    sendProto(socket, 9194, 'CMsgGCCStrike15_v2_ClientGCRankUpdate', {
+        rankings: [
+            {
+                accountId: steamid,
+                rankId: competitiverank,
+                wins: session.rankings.competitive.wins || 0,
+                rankTypeId: 6,
+                rankWindowStats: 0,
+                rankIfWin: Math.min(competitiverank + 1, 18),
+                rankIfLose: Math.max(competitiverank - 1, 1),
+                rankIfTie: competitiverank
+            },
+            {
+                accountId: steamid,
+                rankId: wingmanrank,
+                wins: session.rankings.wingman.wins || 0,
+                rankTypeId: 7,
+                rankWindowStats: 0,
+                rankIfWin: Math.min(wingmanrank + 1, 18),
+                rankIfLose: Math.max(wingmanrank - 1, 1),
+                rankIfTie: wingmanrank
+            },
+            {
+                accountId: steamid,
+                rankId: dzrank,
+                wins: session.rankings.dangerzone.wins || 0,
+                rankTypeId: 10,
+                rankWindowStats: 0,
+                rankIfWin: Math.min(dzrank + 1, 18),
+                rankIfLose: Math.max(dzrank - 1, 1),
+                rankIfTie: dzrank
+            }
+        ]
+    }, steamid);
+
+    sendProto(socket, 4009, 'CMsgConnectionStatus', {
+        status: 0,
+        clientSessionNeed: 0,
+        queuePosition: 0,
+        queueSize: 0,
+        waitSeconds: 0,
+        estimatedWaitSecondsRemaining: 0 
+    }); 
+
+
     socket.end();
+
 });
 
 events.on('CMsgGCCStrike15_v2_MatchmakingStart', (data, socket, steamid) => {
@@ -791,8 +850,12 @@ const server = net.createServer((socket) => {
         if (decoded) {
             events.emit(decoded.name, decoded.data, socket, decoded.steamid);
         }
-        console.log('client disconnected');
+        console.log('[SOCKET] socket closed by server');
     });
+
+    socket.on('close', () => {
+        console.log('[SOCKET] closed by client');
+    })
 
     socket.on('error', (err) => {
         console.log(`[ERROR] socket: ${err.message}`);
