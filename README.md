@@ -2,7 +2,7 @@
 
 **CS:GO's Game Coordinator Replacement to revive matchmaking in CS:GO**
 
-A custom Game Coordinator for CS:GO Legacy, written in Node.js.
+A custom Game Coordinator for CS:GO Legacy, written in JavaScript.
 
 ## warning:
 This code sucks and not perfect, cuz its in active developing phase
@@ -15,21 +15,16 @@ This code sucks and not perfect, cuz its in active developing phase
 
 ## Requirements
 
-- Node.js:
-npm,
-net,
-protobufjs,
-- CS:GO Legacy with modified `csgo_gc.dll` [from here](https://github.com/aka3257/csgo_gc-mm/tree/tcp-beta)
+CS:GO Legacy with modified `csgo_gc.dll` [from here](https://github.com/aka3257/csgo_gc-mm)
 
 ## Quick Start
 
-drop downloaded file `Server_v2.js` in your folder with required modules,
-then open console in that folder and run server with `node Server_v2.js`
+download zip file with server, unpack it, run `gc-server.exe`, change ip in `config.json` to your internal ip and open port specified in config file, enjoy
 
 ## Special thanks to:
 
 - The CSGO Modding community
-- Valve for protobuf protocol
+- Valve
 
 ## LICENSE
 
