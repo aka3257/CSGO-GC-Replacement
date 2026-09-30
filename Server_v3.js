@@ -2,16 +2,32 @@ const net = require('node:net');
 const protobuf = require('protobufjs');
 const fs = require('fs');
 
-// config settings
+// required files
+
+const options = {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false
+};
+
+function log(text) {
+    const localTime = new Date().toLocaleString('ru-RU', options);
+    console.log(`[${localTime}]: ${text}`)
+}
 
 const CONFIG_FILE = './config.json'
+const PRICESHEET_FILE = './pricesheet.json'
 
 let config;
 try {
     config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
-    console.log('[Notification] loaded config file!')
+    log('[Notification] loaded config file!')
 } catch (err) {
-    console.log('[Notification] config file not found! if its first start its okay')
+    log('[WARN] config file not found! creating default...');
     const default_config = {
         host: '127.0.0.1',
         port: 3257,
@@ -23,8 +39,67 @@ try {
     }
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(default_config, null, 2));
     config = default_config;
-    console.log('[Notification] created config file')
-    console.log('[Advice] specify your ip in config file')
+    log('[Notification] created config file')
+    log('[Advice] specify your ip in config file')
+}
+
+function getDefaultPriceSheet() {
+    return {
+        version: 1,
+        items: {
+            "community_31 Key": 249,
+            "community_30 Key": 249,
+            "community_29 Key": 249,
+            "Name Tag": 199,
+            "Weapon Case Key": 249,
+            "Sticker Crate Key": 99,
+            "casket": 199
+        }
+    };
+}
+
+function buildPriceSheetBinary(priceData) {
+    const chunks = [];
+    
+    // Заголовок прайсшита
+    chunks.push(0x0A); // field 1: version
+    chunks.push(0x02); // varint length
+    chunks.push(priceData.version || 1);
+    
+    // Items
+    for (const [itemName, value] of Object.entries(priceData.items || {})) {
+        let price;
+        if (typeof value === 'number') {
+            price = value;
+        } else if (typeof value === 'object' && value !== null && value.price !== undefined) {
+            price = value.price;
+        } else {
+            log(`[WARN] Invalid price for ${itemName}, skipping`);
+            continue;
+        }
+        
+        // Формат: 0x00 (subkey) + itemName + 0x02 (string) + price
+        chunks.push(0x00);
+        chunks.push(...Buffer.from(itemName + '\0'));
+        chunks.push(0x02);
+        chunks.push(...Buffer.from(price.toString() + '\0'));
+    }
+    
+    chunks.push(0x0B); // Terminate
+    return Buffer.from(chunks);
+}
+
+let gpricesheet;
+try {
+    const raw = fs.readFileSync(PRICESHEET_FILE, 'utf-8');
+    gpricesheet = JSON.parse(raw);
+    log('[Notification] loaded pricesheet file!');
+} catch {
+    log('[WARN] pricesheet file not found! creating default...');
+    const def = getDefaultPriceSheet();
+    fs.writeFileSync(PRICESHEET_FILE, JSON.stringify(def, null, 2));
+    gpricesheet = def;
+    log('[Notification] created pricesheet file');
 }
 
 const root = protobuf.loadSync([
@@ -33,9 +108,11 @@ const root = protobuf.loadSync([
     `${config.protoPath}/econ_gcmessages.proto`,
     `${config.protoPath}/engine_gcmessages.proto`,
     `${config.protoPath}/gcsdk_gcmessages.proto`,
-    `${config.protoPath}/gcsystemmsgs.proto`
+    `${config.protoPath}/gcsystemmsgs.proto`,
+    `${config.protoPath}/steammessages.proto`
 ]);
 
+const GC_VER = 'v0.2'; //version of server
 const DEVMODE = config.devmode; //debug mode
 const DATA_DIR = config.PlayerData; //self-explanatory
 const SERV_VER = config.serverVersion; //version that srcds requires
@@ -46,9 +123,9 @@ if (!fs.existsSync(DATA_DIR)) {
 }
 
 if (DEVMODE === true) {
-    console.log('[Notification] GC started in debug mode')
+    log('[Notification] GC started in debug mode')
 } else {
-    console.log('[Notification] GC started in normal mode')
+    log('[Notification] GC started in normal mode')
 }
 
 // id dictionary
@@ -60,6 +137,8 @@ const IDict = {
     4005: 'CMsgGCServerWelcome',
     4006: 'CMsgClientHello',
     4007: 'CMsgGCServerHello',
+    2500: 'CMsgStoreGetUserData',
+    2501: 'CMsgGCStoreGetUserDataResponse',
     9101: 'CMsgGCCStrike15_v2_MatchmakingStart',
     9102: 'CMsgGCCStrike15_v2_MatchmakingStop',
     9103: 'CMsgGCCStrike15_v2_MatchmakingClient2ServerPing',
@@ -75,7 +154,7 @@ const IDict = {
     9201: 'CMsgGCCStrike15_v2_GetEventFavorites_Request',
     9203: 'CMsgGCCStrike15_v2_GetEventFavorites_Response',
     9164: 'CMsgGCCStrike15_v2_ClientRequestJoinServerData',
-    4009: 'CMsgGCClientConnectionStatus',
+    4009: 'CMsgConnectionStatus',
 };
 
 function getMessageNameById(id) {
@@ -87,40 +166,49 @@ for (const id in IDict) {
     ReverseIDict[IDict[id]] = Number(id);
 }
 
-// functions
+// functions 
 
-function encodeGCMessage(messageName, object) {
-    const msgId = ReverseIDict[messageName];
-    if (!msgId) {
-        console.log(`[ERROR] Unknown message: ${messageName}`);
-        return null;
-    }
-    try {
-        const MessageType = root.lookupType(messageName);
-        const message = MessageType.fromObject(object);
-        const payload = MessageType.encode(message).finish();
-        const finalMsgType = (0x80000000 | msgId) >>> 0;
-        return JSON.stringify({
-            msgType: finalMsgType,
-            data: payload.toString('hex')
-        });
-    } catch (err) {
-        console.error(`[ERROR] encodeGCMessage:`, err.message);
-        return null;
-    }
-}
-
-// Steam GC protobuf wire format:
-// uint32 type | 0x80000000, uint32 headerSize, [header], [protobuf payload]
-function encodeProto(msgType, protoName, object) {  // im too lazy to comment all its strings
-    const Proto = root.lookupType(protoName);
-    const payload = Proto.encode(Proto.fromObject(object)).finish();
-    const type = (0x80000000 | msgType) >>> 0;
-    const buffer = Buffer.alloc(8 + payload.length);
-    buffer.writeUInt32LE(type, 0);
-    buffer.writeUInt32LE(0, 4); // empty CMsgProtoBufHeader
-    payload.copy(buffer, 8);
-    return buffer;
+function getDefaultInventory(steamid) {
+    const now = Math.floor(Date.now() / 1000);
+    return [
+        // Стартовые скины
+        {
+            id: steamid * 1000 + 1,
+            accountId: steamid,
+            defIndex: 7,    // AK-47
+            quantity: 1,
+            level: 1,
+            quality: 0,
+            inventory: 0,
+            origin: 0,
+            inUse: true,
+            equippedState: [{ classId: 0, slotId: 1 }]
+        },
+        {
+            id: steamid * 1000 + 2,
+            accountId: steamid,
+            defIndex: 60,   // M4A1-S
+            quantity: 1,
+            level: 1,
+            quality: 0,
+            inventory: 0,
+            origin: 0,
+            inUse: true,
+            equippedState: [{ classId: 1, slotId: 0 }]
+        },
+        {
+            id: steamid * 1000 + 3,
+            accountId: steamid,
+            defIndex: 42,   // Knife
+            quantity: 1,
+            level: 1,
+            quality: 0,
+            inventory: 0,
+            origin: 0,
+            inUse: true,
+            equippedState: [{ classId: 0, slotId: 2 }, { classId: 1, slotId: 2 }]
+        }
+    ];
 }
 
 function sendProto(socket, msgType, protoName, object, steamid = 0) {
@@ -131,19 +219,30 @@ function sendProto(socket, msgType, protoName, object, steamid = 0) {
 
         const finalMsgType = (0x80000000 | msgType) >>> 0;
         
-        const totalLen = 8 + payload.length; // msgType (4) + header (4) + payload
+        // Создаём CMsgProtoBufHeader с валидным job_id_source
+        const header = {
+            job_id_source: 0, // ← не JobIdInvalid!
+            job_id_target: -1, // ← JobIdInvalid
+            eresult: 2,
+        };
+        const HeaderType = root.lookupType('CMsgProtoBufHeader');
+        const headerBuffer = HeaderType.encode(HeaderType.fromObject(header)).finish();
+        const headerSize = headerBuffer.length;
+
+        const totalLen = 4 + headerSize + payload.length; // msgType (4) + header + payload
         const buffer = Buffer.alloc(4 + totalLen);
         
-        buffer.writeUInt32LE(totalLen, 0);   // ← ПРЕФИКС ДЛИНЫ!
+        buffer.writeUInt32LE(totalLen, 0);
         buffer.writeUInt32LE(finalMsgType, 4);
-        buffer.writeUInt32LE(0, 8);          // пустой CMsgProtoBufHeader
-        payload.copy(buffer, 12);
+        buffer.writeUInt32LE(headerSize, 8); // ← правильный размер!
+        headerBuffer.copy(buffer, 12);
+        payload.copy(buffer, 12 + headerSize);
 
-        console.log(`[SENT] ${protoName} (${finalMsgType}) ${buffer.length} bytes, totalLen=${totalLen}`);
+        log(`[SENT] ${protoName} (${finalMsgType}) ${buffer.length} bytes, totalLen=${totalLen}`);
         socket.write(buffer);
         return true;
     } catch (err) {
-        console.error(`[ERROR] sendProto:`, err.message);
+        console.error(`[${localTime}]: [ERROR] sendProto:`, err.message);
         return false;
     }
 }
@@ -152,7 +251,7 @@ function getMSGdata(buffer) {
     try {
         // Пакет от форвардера: steamid (8 байт) + msgType (4 байта) + Protobuf-данные
         if (buffer.length < 12) {
-            console.log('[ERROR] Buffer too small');
+            log(`[ERROR] Buffer too small`);
             return null;
         }
         const steamId = buffer.readBigUInt64LE(0);
@@ -162,20 +261,20 @@ function getMSGdata(buffer) {
         const messageName = getMessageNameById(cleanMsgId);
 
         // Protobuf-данные начинаются с 12-го байта
-        const protoData = buffer.subarray(120);
-        if (DEVMODE === 1) {
-            console.log(`[DEBUG] steamId: ${AccountId}, msgId: ${msgId}, cleanMsgId: ${cleanMsgId}, name: ${messageName}`);
-            console.log(`[DEBUG] hex: ${buffer.toString('hex')}`);
+        const protoData = buffer.subarray(16);
+        if (DEVMODE === true) {
+            log(`[DEBUG] steamId: ${AccountId}, msgId: ${msgId}, cleanMsgId: ${cleanMsgId}, name: ${messageName}`);
+            log(`[DEBUG] hex: ${buffer.toString('hex')}`);
         }
         if (!messageName) {
-            console.log('[ERROR] Unknown message');
+            log(`[ERROR] Unknown message: ${buffer.toString('hex')}`);
             return null;
         }
         const MessageType = root.lookupType(messageName);
         const decoded = MessageType.decode(protoData);
         return { name: messageName, steamid: AccountId, data: decoded };
     } catch (err) {
-        console.error(`[ERROR] getMSGdata:`, err.message);
+        console.error(`[${localTime}]: [ERROR] getMSGdata:`, err.message);
         return null;
     }
 }
@@ -195,51 +294,6 @@ function loadPlayer(accountId) {
     return null;
 }
 
-function getOrCreateSession(steamId) {
-
-//    const accountId = Number(steamId & 0xFFFFFFFFn); // if steam id is bigint
-    const accountId = steamId % 2**32;
-
-    let session = loadPlayer(accountId);
-    if (!session) {
-        session = {
-            accountId: AccountId,
-            rankings: {
-                competitive: {
-                    rank: 1,
-                    wins: 0
-                },
-                wingman: {
-                    rank: 1,
-                    wins: 0
-                },
-                dangerzone: {
-                    rank: 1,
-                    wins: 0
-                }
-            },
-            playerLevel: 1,
-            playerCurXp: 0,
-            matchId: null,
-            partyId: null,
-            matchmaking: false,
-            lastPing: Date.now(),
-            isInitiatedMMSearchStop: false,
-            vacBanned: 0,
-            inventory: [],
-            cmd: {
-                friendly: 1,
-                teaching: 2,
-                leader: 3
-            },
-            vacBanned: 0
-        };
-        savePlayer(accountId, session);
-    };
-    sessions.set(accountId, session);
-    return { accountId, session };
-}
-
 function uint32ToIp(uint32) {
     const octet1 = (uint32 >>> 24) & 0xFF;
     const octet2 = (uint32 >>> 16) & 0xFF;
@@ -248,10 +302,182 @@ function uint32ToIp(uint32) {
     return `${octet1}.${octet2}.${octet3}.${octet4}`;
 }
 
-function sendWithDelay(socket, msgType, protoName, object, delay = 100) {
-    // Do not use this on per-request TCP. The client opens one connection,
-    // reads the reply, then the socket is closed. Delayed writes get dropped.
-    sendProto(socket, msgType, protoName, object);
+function buildCacheSubscription_DEPRECATED(steamid, session, level = 1) {
+    // Защита от undefined
+    if (!session) session = { inventory: [], cmd: { friendly: 1, teaching: 2, leader: 3 } };
+    if (!session.inventory) session.inventory = [];
+    if (!session.cmd) session.cmd = { friendly: 1, teaching: 2, leader: 3 };
+
+    const message = {
+        version: 1575,
+        ownerSoid: { type: 1, id: steamid },
+        objects: []
+    };
+
+    // 1. Инвентарь (тип 1) — пустой для теста, но с правильным object_data (массив бинарных данных)
+    const inventoryObject = {
+        typeId: 1,  // ← snake_case!
+        objectData: []
+    };
+    message.objects.push(inventoryObject);
+
+    // 2. Данные профиля (тип 2, а не 4!)
+    const personaData = {
+        playerLevel: level,      // snake_case!
+        elevatedState: false,
+        commendation: {
+            cmdFriendly: session.cmd.friendly || 1,
+            cmdTeaching: session.cmd.teaching || 1,
+            cmdLeader: session.cmd.leader || 1
+        }
+    };
+    // Сериализуем в бинарный protobuf
+    const PersonaType = root.lookupType('CSOPersonaDataPublic');
+    const personaBuffer = PersonaType.encode(PersonaType.fromObject(personaData)).finish();
+
+    const personaObject = {
+        typeId: 2,  // ← исправлено!
+        objectData: [personaBuffer]
+    };
+    message.objects.push(personaObject);
+
+    // 3. Аккаунт (тип 7)
+    const accountClient = {
+        additionalBackpackSlots: 0,
+        bonusXpTimestampRefresh: Math.floor(Date.now() / 1000),
+        bonusXpUsedflags: 16,
+        elevatedState: 2,    // Prime
+        elevatedTimestamp: 2
+    };
+    const AccountType = root.lookupType('CSOEconGameAccountClient');
+    const accountBuffer = AccountType.encode(AccountType.fromObject(accountClient)).finish();
+
+    const accountObject = {
+        type_id: 7,
+        object_data: [accountBuffer]
+    };
+    message.objects.push(accountObject);
+
+    // 4. Дефолтная экипировка (тип 43, а не 8!)
+    const defaultEquips = [
+        { account_id: steamid, item_definition: 60, class_id: 0, slot_id: 0 },
+        { account_id: steamid, item_definition: 7, class_id: 0, slot_id: 1 },
+        { account_id: steamid, item_definition: 60, class_id: 1, slot_id: 0 },
+        { account_id: steamid, item_definition: 1, class_id: 1, slot_id: 1 },
+        { account_id: steamid, item_definition: 42, class_id: 0, slot_id: 2 },
+        { account_id: steamid, item_definition: 42, class_id: 1, slot_id: 2 }
+    ];
+    const DefaultEquipType = root.lookupType('CSOEconDefaultEquippedDefinitionInstanceClient');
+    const defaultBuffers = defaultEquips.map(eq => 
+        DefaultEquipType.encode(DefaultEquipType.fromObject(eq)).finish()
+    );
+
+    const defaultEquipObject = {
+        type_id: 43,  // ← исправлено!
+        object_data: defaultBuffers
+    };
+    message.objects.push(defaultEquipObject);
+
+    return message;
+}
+
+function buildCacheSubscription(steamid, session, level = 1) {
+    // Защита от undefined
+    if (!session) session = { inventory: [], cmd: { friendly: 1, teaching: 2, leader: 3 } };
+    if (!session.inventory) session.inventory = [];
+    if (!session.cmd) session.cmd = { friendly: 1, teaching: 2, leader: 3 };
+
+    const cache = {
+        version: 1575,
+        owner_soid: { type: 1, id: steamid },
+        objects: []
+    };
+
+    // 1. Инвентарь
+    const invObj = {
+        type_id: 1,
+        object_data: []
+    };
+    if (session.inventory.length > 0) {
+        for (const item of session.inventory) {
+            // Сериализуем как CSOEconItem
+            const econItem = {
+                id: item.id || Math.floor(Math.random() * 1000000000),
+                account_id: steamid,
+                inventory: item.inventory || 0,
+                def_index: item.defIndex || 0,
+                quantity: item.quantity || 1,
+                level: item.level || 1,
+                quality: item.quality || 0,
+                flags: item.flags || 0,
+                origin: item.origin || 0,
+                custom_name: item.customName || "",
+                custom_desc: item.customDesc || "",
+                attribute: item.attribute || [],
+                in_use: item.inUse || false,
+                style: item.style || 0,
+                original_id: item.originalId || 0,
+                equipped_state: item.equippedState || [],
+                rarity: item.rarity || 0
+            };
+            const EconItemType = root.lookupType('CSOEconItem');
+            const buffer = EconItemType.encode(EconItemType.fromObject(econItem)).finish();
+            invObj.object_data.push(buffer);
+        }
+    }
+    cache.objects.push(invObj);
+
+    // 2. Данные профиля
+    const personaData = {
+        player_level: level,
+        elevated_state: true,
+        commendation: {
+            cmd_friendly: session.cmd.friendly || 1,
+            cmd_teaching: session.cmd.teaching || 1,
+            cmd_leader: session.cmd.leader || 1
+        }
+    };
+    const PersonaType = root.lookupType('CSOPersonaDataPublic');
+    const personaBuffer = PersonaType.encode(PersonaType.fromObject(personaData)).finish();
+    cache.objects.push({
+        type_id: 2,
+        object_data: [personaBuffer]
+    });
+
+    // 3. Аккаунт
+    const accountClient = {
+        additional_backpack_slots: 0,
+        bonus_xp_timestamp_refresh: Math.floor(Date.now() / 1000),
+        bonus_xp_usedflags: 16,
+        elevated_state: 5,
+        elevated_timestamp: Math.floor(Date.now() / 1000)
+    };
+    const AccountType = root.lookupType('CSOEconGameAccountClient');
+    const accountBuffer = AccountType.encode(AccountType.fromObject(accountClient)).finish();
+    cache.objects.push({
+        type_id: 7,
+        object_data: [accountBuffer]
+    });
+
+    // 4. Дефолтная экипировка
+    const defaultEquips = [
+        { account_id: steamid, item_definition: 60, class_id: 0, slot_id: 0 },
+        { account_id: steamid, item_definition: 7, class_id: 0, slot_id: 1 },
+        { account_id: steamid, item_definition: 60, class_id: 1, slot_id: 0 },
+        { account_id: steamid, item_definition: 1, class_id: 1, slot_id: 1 },
+        { account_id: steamid, item_definition: 42, class_id: 0, slot_id: 2 },
+        { account_id: steamid, item_definition: 42, class_id: 1, slot_id: 2 }
+    ];
+    const DefaultEquipType = root.lookupType('CSOEconDefaultEquippedDefinitionInstanceClient');
+    const defaultBuffers = defaultEquips.map(eq =>
+        DefaultEquipType.encode(DefaultEquipType.fromObject(eq)).finish()
+    );
+    cache.objects.push({
+        type_id: 43,
+        object_data: defaultBuffers
+    });
+
+    return cache;
 }
 
 // event handler
@@ -288,7 +514,7 @@ const sessions = new Map();
 
 events.on('CMsgClientHello', (data, socket, steamid) => {
 
-    console.log(`[Notification] ClientHello from ${steamid}`)
+    log(`[Notification] ClientHello from ${steamid}`)
 
     let session = loadPlayer(steamid);
     if (!session) {
@@ -307,7 +533,7 @@ events.on('CMsgClientHello', (data, socket, steamid) => {
             lastPing: Date.now(),
             isInitiatedMMSearchStop: false,
             vacBanned: 0,
-            inventory: [],
+            inventory: getDefaultInventory(steamid),
             cmd: { friendly: 1, teaching: 2, leader: 3 }
         };
         sessions.set(steamid, session);
@@ -324,27 +550,36 @@ events.on('CMsgClientHello', (data, socket, steamid) => {
     const cmdleader = session.cmd.leader || 1;
 
     const csWelcome1 = {
-        storeItemHash: 0,
+        storeItemHash: 136617352,
         timeplayedconsecutively: 0,
-        timeFirstPlayed: 0,
-        lastTimePlayed: 0,
+        timeFirstPlayed: 1329845773,
+        lastTimePlayed: 1680260376,
         lastIpAddress: 0,
-        gscookieid: 1488,
-        uniqueid: 1488
+        gscookieid: 0,
+        uniqueid: 0
     };
 
     const csWelcome2 = {
         accountId: steamid,
+        ongoingmatch: null,
         globalStats: {
             playersOnline: 2,
             serversOnline: 1,
             playersSearching: 1,
             serversAvailable: 1,
             ongoingMatches: 0,
-            searchTimeAvg: 30,
-            requiredAppidVersion: 1575,
-            rtime32Cur: Math.floor(Date.now() / 1000)
+            searchTimeAvg: 81387,
+            mainPostUrl: "",
+            requiredAppidVersion: 13881,
+            pricesheetVersion: 1680057676,
+            twitchStreamsVersion: 2,
+            activeTournamentEventid: 20,
+            activeSurveyId: 0,
+            rtime32Cur: null, //Math.floor(Date.now() / 1000),
+            requiredAppidVersion2: 13881
         },
+        penaltySeconds: null,
+        penaltyReason: null,
         vacBanned: 0,
         ranking: {
             accountId: steamid,
@@ -354,15 +589,28 @@ events.on('CMsgClientHello', (data, socket, steamid) => {
             rankWindowStats: 0,
             rankIfWin: Math.min(competitiverank + 1, 18),
             rankIfLose: Math.max(competitiverank - 1, 1),
-            rankIfTie: competitiverank        },
+            rankIfTie: competitiverank
+        },
         commendation: {
             cmdFriendly: cmdfriendly,
             cmdTeaching: cmdteaching,
             cmdLeader: cmdleader
         },
-        medals: [],
+        medals: {
+            displayItemsDefidx: 0,
+            featuredDisplayItemDefidx: 0
+        },
+        myCurrentEvent: [],
+        myCurrentEventTeams: [],
+        myCurrentTeam: [],
+        myCurrentTeamStages: [],
+        surveyVote: 0,
+        activity: {
+            activity: 0
+        },
         playerLevel: playerlevel,
         playerCurXp: playercurxp,
+        playerXpBonusFlags: 0,
         rankings: [
             {
                 accountId: steamid,
@@ -406,24 +654,11 @@ events.on('CMsgClientHello', (data, socket, steamid) => {
         eligibleForCommunityMarket: true
     };
 
-    const socacheSubscribed = {
-        objects: [{ type_id: 1, object_data: [] }],
-        version: 1575,
-        owner_soid: { type: 1, id: steamid }
-    };
+    const cacheSubscription = buildCacheSubscription(steamid, session, session.playerLevel || 2);
 
     const socacheCheck = {
-        version: 1575,
+        version: 0,
         owner_soid: { type: 1, id: steamid }
-    };
-
-    const ConnectionStatus = {
-        status: 0,
-        clientSessionNeed: 0,
-        queuePosition: 0,
-        queueSize: 0,
-        waitSeconds: 0,
-        estimatedWaitSecondsRemaining: 0
     };
 
     const CsWelcomeType1 = root.lookupType('CMsgCStrike15Welcome');
@@ -435,40 +670,46 @@ events.on('CMsgClientHello', (data, socket, steamid) => {
     const CsWelcomeType3 = root.lookupType('CMsgAccountDetails');
     const gamedata3 = CsWelcomeType3.encode(csWelcome3).finish();
 
-    const CsWelcomeType4 = root.lookupType('CMsgConnectionStatus');
-    const gamedata4 = CsWelcomeType4.encode(ConnectionStatus).finish();
-
     sendProto(socket, 4004, 'CMsgClientWelcome', {
-        version: 1575,
+        version: 0,
         gameData: gamedata1,
-        outofdateSubscribedCaches: [socacheSubscribed],
-        uptodateSubscribedCaches: [socacheCheck],
+        outofdateSubscribedCaches: [cacheSubscription],
+//        uptodateSubscribedCaches: [socacheCheck],
         location: {
-            latitude: 55.7558,
-            longitude: 37.6173,
-            country: "RU"
+            latitude: 65.0133006,
+            longitude: 25.4646212,
+            country: "FI"
         },
         gameData2: gamedata2,
         rtime32GcWelcomeTimestamp: Math.floor(Date.now() / 1000),
-        currency: 0,
+        currency: 2,
         balance: 0,
         balanceUrl: "",
-        txnCountryCode: "RU",
+        txnCountryCode: "FI",
     }, steamid);
 
     sendProto(socket, 9110, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientHello', {
         accountId: steamid,
+        ongoingmatch: null,
         globalStats: {
             playersOnline: 2,
             serversOnline: 1,
             playersSearching: 1,
             serversAvailable: 1,
             ongoingMatches: 0,
-            searchTimeAvg: 30,
-            requiredAppidVersion: 1575,
-            rtime32Cur: Math.floor(Date.now() / 1000)
+            searchTimeAvg: 81387,
+            mainPostUrl: "",
+            requiredAppidVersion: 13881,
+            pricesheetVersion: 1680057676,
+            twitchStreamsVersion: 2,
+            activeTournamentEventid: 20,
+            activeSurveyId: 0,
+            rtime32Cur: null, //Math.floor(Date.now() / 1000),
+            requiredAppidVersion2: 13881
         },
-        vacBanned: 0,
+        penaltySeconds: null,
+        penaltyReason: null,
+        vacBanned: 0, //0 - clean, 1 - vac, 2 - game ban
         ranking: {
             accountId: steamid,
             rankId: competitiverank,
@@ -477,15 +718,28 @@ events.on('CMsgClientHello', (data, socket, steamid) => {
             rankWindowStats: 0,
             rankIfWin: Math.min(competitiverank + 1, 18),
             rankIfLose: Math.max(competitiverank - 1, 1),
-            rankIfTie: competitiverank        },
+            rankIfTie: competitiverank
+        },
         commendation: {
             cmdFriendly: cmdfriendly,
             cmdTeaching: cmdteaching,
             cmdLeader: cmdleader
         },
-        medals: [],
+        medals: {
+            displayItemsDefidx: 0,
+            featuredDisplayItemDefidx: 0
+        },
+        myCurrentEvent: [],
+        myCurrentEventTeams: [],
+        myCurrentTeam: [],
+        myCurrentTeamStages: [],
+        surveyVote: 0,
+        activity: {
+            activity: 0
+        },
         playerLevel: playerlevel,
         playerCurXp: playercurxp,
+        playerXpBonusFlags: 0,
         rankings: [
             {
                 accountId: steamid,
@@ -552,34 +806,37 @@ events.on('CMsgClientHello', (data, socket, steamid) => {
         queueSize: 0,
         waitSeconds: 0,
         estimatedWaitSecondsRemaining: 0 
-    }); 
-
-
-    socket.end();
+    }, steamid); 
 
 });
 
+events.on('CMsgStoreGetUserData', (data, socket, steamid) => {
+    log(`[Notification] StoreGetUserData from ${steamid}`);
+
+    const priceSheetBinary = buildPriceSheetBinary(gpricesheet);
+
+    sendProto(socket, 2501, 'CMsgStoreGetUserDataResponse', {
+        result: 1,
+        priceSheetVersion: gpricesheet.version || 1,
+        priceSheet: priceSheetBinary
+    }, steamid)
+})
+
 events.on('CMsgGCCStrike15_v2_MatchmakingStart', (data, socket, steamid) => {
 
-    const AccountId = steamid ? Number(BigInt(steamid) & 0xFFFFFFFFn) : 0;
-    if (!AccountId) {
-        console.log(`[HANDLER] MatchmakingStart from unknown id`);
-        return;
-    } else {
-            console.log(`[HANDLER] MatchmakingStart from ${AccountId}`);
-    };
+    log(`[HANDLER] MatchmakingStart from ${steamid}`);
     
-    let session = loadPlayer(AccountId);
+    let session = loadPlayer(steamid);
     const gameType = data?.game_type || 0;
     
     if (session) {
         session.matchmaking = true;
-        savePlayer(AccountId);
+        savePlayer(steamid);
     }
 
     sendProto(socket, 9104, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientUpdate', {
         matchmaking: 1,
-        waitingAccountIdSessions: [AccountId || 100000000],
+        waitingAccountIdSessions: [steamid || 100000000],
         globalStats: {
             playersOnline: 2,
             serversOnline: 1,
@@ -598,24 +855,18 @@ events.on('CMsgGCCStrike15_v2_MatchmakingStart', (data, socket, steamid) => {
                 distance: 0
             }
         ]
-    });
+    }, steamid);
 });
 
 events.on('CMsgGCCStrike15_v2_MatchmakingClient2ServerPing', (data, socket, steamid) => {
 
     const gameType = data?.game_type || 0;
 
-    const AccountId = steamid ? Number(BigInt(steamid) & 0xFFFFFFFFn) : 0;
-    if (!AccountId) {
-        console.log(`[HANDLER] MatchmakingClient2ServerPing from unknown id`);
-        return;
-    } else {
-            console.log(`[HANDLER] MatchmakingClient2ServerPing from ${AccountId}`);
-    };
+    log(`[HANDLER] MatchmakingClient2ServerPing from ${steamid}`);
 
     sendProto(socket, 9104, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientUpdate', {
         matchmaking: 1,
-        waitingAccountIdSessions: [100000000],
+        waitingAccountIdSessions: [steamid],
         globalStats: {
             playersOnline: 2,
             serversOnline: 1,
@@ -634,26 +885,21 @@ events.on('CMsgGCCStrike15_v2_MatchmakingClient2ServerPing', (data, socket, stea
                 distance: 0
             }
         ]
-    });
+    }, steamid);
 });
 
 events.on('CMsgGCCStrike15_v2_GetEventFavorites_Request', (data, socket, steamid) => {
-    console.log('[HANDLER] GetEventFavorites');
+    log('[HANDLER] GetEventFavorites');
     sendProto(socket, 9203, 'CMsgGCCStrike15_v2_GetEventFavorites_Response', {
         allEvents: false,
-        jsonFavorites: "{}",
-        jsonFeatured: "{}"
-    });
+        jsonFavorites: null,
+        jsonFeatured: null
+    }, steamid);
 });
 
 events.on('CMsgGCCStrike15_v2_MatchmakingStop', (data, socket, steamid) => {
-    const AccountId = steamid ? Number(BigInt(steamid) & 0xFFFFFFFFn) : 0;
-    if (!AccountId) {
-        console.log(`[HANDLER] MatchmakingStop from unknown id`);
-        return;
-    } else {
-            console.log(`[HANDLER] MatchmakingStop from ${AccountId}`);
-    };
+
+    log(`[HANDLER] MatchmakingStop from ${steamid}`);
 
     sendProto(socket, 9104, 'CMsgGCCStrike15_v2_MatchmakingGC2ClientUpdate', {
         matchmaking: 0,
@@ -671,9 +917,9 @@ events.on('CMsgGCCStrike15_v2_MatchmakingStop', (data, socket, steamid) => {
         notes: [{
             prime: true
         }]
-    });
+    }, steamid);
 
-    savePlayer(AccountId);
+    savePlayer(steamid);
 });
 
 
@@ -681,10 +927,10 @@ events.on('CMsgGCCStrike15_v2_ClientGCRankUpdate', (data, socket, steamid) => {
 
     let session = sessions.get(steamid);
     if (!session) {
-        console.log(`[ERROR] Session not found for ${steamid}`);
+        log(`[ERROR] Session not found for ${steamid}`);
         session = loadPlayer(steamid);
         if (!session) {
-            console.log(`[ERROR] No session on disk for ${steamid}`);
+            log(`[ERROR] No session on disk for ${steamid}`);
             return;
         }
         sessions.set(steamid, session);
@@ -696,7 +942,7 @@ events.on('CMsgGCCStrike15_v2_ClientGCRankUpdate', (data, socket, steamid) => {
     
     const requestedRankTypeId = data?.rankings?.[0]?.rankTypeId || 6;
 
-    console.log(`[RANK UPDATE] for ${steamid} for rank ${requestedRankTypeId}`);
+    log(`[RANK UPDATE] for ${steamid} for rank ${requestedRankTypeId}`);
     
     if (requestedRankTypeId === 6) {
         sendProto(socket, 9194, 'CMsgGCCStrike15_v2_ClientGCRankUpdate', {
@@ -712,7 +958,7 @@ events.on('CMsgGCCStrike15_v2_ClientGCRankUpdate', (data, socket, steamid) => {
                     rankIfTie: competitiverank
                 },
             ]
-        });
+        }, steamid);
     } else {
         sendProto(socket, 9194, 'CMsgGCCStrike15_v2_ClientGCRankUpdate', {
             rankings: [
@@ -737,24 +983,23 @@ events.on('CMsgGCCStrike15_v2_ClientGCRankUpdate', (data, socket, steamid) => {
                     rankIfTie: dzrank
                 }
             ]
-        });
+        }, steamid);
     }
-    finishResponse(socket);
 });
 
 events.on('CMsgGCCStrike15_v2_Party_Register', (data, socket, steamid) => {
-    console.log('[PARTY] Register');
-    sendProto(socket, 9190, 'CMsgGCCStrike15_v2_Party_Unregister', {});
+    log('[PARTY] Register');
+    sendProto(socket, 9190, 'CMsgGCCStrike15_v2_Party_Unregister', {}, steamid);
 });
 
 events.on('CMsgGCCStrike15_v2_ClientRequestJoinServerData', (data, socket, steamid) => {
     
     const AccountId = steamid ? Number(BigInt(steamid) & 0xFFFFFFFFn) : 0;
     if (!AccountId) {
-        console.log(`[HANDLER] ClientRequestJoinServerData from unknown id`);
+        log(`[HANDLER] ClientRequestJoinServerData from unknown id`);
         return;
     } else {
-            console.log(`[HANDLER] ClientRequestJoinServerData from ${AccountId}`);
+            log(`[HANDLER] ClientRequestJoinServerData from ${AccountId}`);
     };
 
     let session = loadPlayer(AccountId);
@@ -831,13 +1076,13 @@ events.on('CMsgGCCStrike15_v2_ClientRequestJoinServerData', (data, socket, steam
             map: "de_lake",
             serverAddress: `${readableIp}:${data.serverPort}`
         }
-    })
+    }, steamid);
 })
 
 // server body
 
 const server = net.createServer((socket) => {
-    console.log('client connected');
+    log(`[SOCKET] connect from ${socket.remoteAddress}:${socket.remotePort}`);
     const chunks = [];
 
     socket.on('data', (data) => {
@@ -850,15 +1095,15 @@ const server = net.createServer((socket) => {
         if (decoded) {
             events.emit(decoded.name, decoded.data, socket, decoded.steamid);
         }
-        console.log('[SOCKET] socket closed by server');
+        log('[SOCKET] end on server');
     });
 
     socket.on('close', () => {
-        console.log('[SOCKET] closed by client');
+        log(`[SOCKET] closed by client ${socket.remoteAddress}:${socket.remotePort}`);
     })
 
     socket.on('error', (err) => {
-        console.log(`[ERROR] socket: ${err.message}`);
+        log(`[ERROR] socket: ${err.message}`);
     });
 });
 
@@ -868,5 +1113,5 @@ const PORT = config.port;
 const HOST = config.host;
 
 server.listen(PORT, HOST, () => {
-    console.log(`[Notification] GC running on ${HOST}:${PORT}`);
+    log(`[Notification] GC ${GC_VER} running on ${HOST}:${PORT}`);
 });
