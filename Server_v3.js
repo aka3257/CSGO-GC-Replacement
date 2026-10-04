@@ -112,7 +112,7 @@ const root = protobuf.loadSync([
     `${config.protoPath}/steammessages.proto`
 ]);
 
-const GC_VER = 'v0.2'; //version of server
+const GC_VER = 'v0.3'; //version of server
 const DEVMODE = config.devmode; //debug mode
 const DATA_DIR = config.PlayerData; //self-explanatory
 const SERV_VER = config.serverVersion; //version that srcds requires
