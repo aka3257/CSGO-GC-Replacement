@@ -112,7 +112,7 @@ const root = protobuf.loadSync([
     `${config.protoPath}/steammessages.proto`
 ]);
 
-const GC_VER = 'v0.3'; //version of server
+const GC_VER = 'v0.3a'; //version of server
 const DEVMODE = config.devmode; //debug mode
 const DATA_DIR = config.PlayerData; //self-explanatory
 const SERV_VER = config.serverVersion; //version that srcds requires
@@ -234,7 +234,7 @@ function sendProto(socket, msgType, protoName, object, steamid = 0) {
         
         buffer.writeUInt32LE(totalLen, 0);
         buffer.writeUInt32LE(finalMsgType, 4);
-        buffer.writeUInt32LE(headerSize, 8); // ← правильный размер!
+        buffer.writeUInt32LE(headerSize, 8);
         headerBuffer.copy(buffer, 12);
         payload.copy(buffer, 12 + headerSize);
 
@@ -242,7 +242,7 @@ function sendProto(socket, msgType, protoName, object, steamid = 0) {
         socket.write(buffer);
         return true;
     } catch (err) {
-        console.error(`[${localTime}]: [ERROR] sendProto:`, err.message);
+        log(('[ERROR] sendProto: ' + err.message))
         return false;
     }
 }
@@ -260,7 +260,7 @@ function getMSGdata(buffer) {
         const cleanMsgId = msgId & 0x7FFFFFFF;
         const messageName = getMessageNameById(cleanMsgId);
 
-        // Protobuf-данные начинаются с 12-го байта
+        // Protobuf-данные начинаются с 16-го байта
         const protoData = buffer.subarray(16);
         if (DEVMODE === true) {
             log(`[DEBUG] steamId: ${AccountId}, msgId: ${msgId}, cleanMsgId: ${cleanMsgId}, name: ${messageName}`);
@@ -274,7 +274,7 @@ function getMSGdata(buffer) {
         const decoded = MessageType.decode(protoData);
         return { name: messageName, steamid: AccountId, data: decoded };
     } catch (err) {
-        console.error(`[${localTime}]: [ERROR] getMSGdata:`, err.message);
+        log(('[ERROR] getMSGdata: ' + err.message))
         return null;
     }
 }
