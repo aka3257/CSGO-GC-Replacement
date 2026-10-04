@@ -19,7 +19,11 @@ CS:GO Legacy with modified `csgo_gc.dll` [from here](https://github.com/aka3257/
 
 ## Quick Start
 
-download zip file with server, unpack it, run `gc-server.exe`, change ip in `config.json` to your internal ip and open port specified in config file, enjoy
+1. download zip file with server, unpack it
+2. install protobufjs with `npm install protobufjs`
+3. run `gc-server.exe`
+4. change ip in `config.json` to your internal ip and open port specified in config file
+5. enjoy
 
 ## Special thanks to:
 
