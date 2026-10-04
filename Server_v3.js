@@ -229,7 +229,7 @@ function sendProto(socket, msgType, protoName, object, steamid = 0) {
         const headerBuffer = HeaderType.encode(HeaderType.fromObject(header)).finish();
         const headerSize = headerBuffer.length;
 
-        const totalLen = 4 + headerSize + payload.length; // msgType (4) + header + payload
+        const totalLen = 8 + headerSize + payload.length; // msgType (4) + header + payload
         const buffer = Buffer.alloc(4 + totalLen);
         
         buffer.writeUInt32LE(totalLen, 0);
@@ -1029,7 +1029,7 @@ events.on('CMsgGCCStrike15_v2_ClientRequestJoinServerData', (data, socket, steam
             reservation: {
                 accountIds: [AccountId],
                 gameType: 2,
-                matchId: 1488,
+                matchId: 87239,
                 serverVersion: SERV_VER,
                 rankings: [
                     {
