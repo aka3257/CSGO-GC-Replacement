@@ -15,7 +15,7 @@ This code sucks and not perfect, cuz its in active developing phase
 
 ## Requirements
 
-CS:GO Legacy with modified `csgo_gc.dll` [from here](https://github.com/aka3257/csgo_gc-mm)
+csgc [from here](https://github.com/aka3257/csgc)
 
 ## Quick Start
 
